@@ -120,7 +120,7 @@ export class Transcript {
         break
       }
       case 'tool/result': {
-        const toolId = 'tool.' + event.data.message.callId
+        const toolId = 'tool.' + event.data.message.toolCallId
         entry = {
           id: toolId,
           kind: event.data.message.isError ? 'error' : 'tool',
