@@ -14,7 +14,7 @@ capture_id, scope, model_id, workspace_start, collector and wire_file.
 No traversal of runtime/, home/, cache/, config/, sockets, or unknown files.
 Only allowlisted owner-only files are archived; optional fixture payloads need
 --include-fixtures. Decoded SDK JSON body hash/size is NOT a raw wire hash.
-Generated manifest and redacted metadata are staged outside the evidence tree;
+A consistent copied input snapshot, manifest, and redacted metadata are staged outside the evidence tree;
 the complete archive is linked into place atomically without replacement.
 Failed attempts leave input untouched and are retryable.
 """
@@ -27,6 +27,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import stat
 import sys
 import tarfile
@@ -134,6 +135,42 @@ def collect(root: Path, include_fixtures: bool) -> dict[str, Path]:
     return chosen
 
 
+def snapshot_inputs(chosen: dict[str, Path], stage: Path) -> tuple[Path, dict[str, Path]]:
+    """Copy only admitted regular inputs to an invocation-owned sealed view."""
+    root = stage / "inputs"
+    root.mkdir(mode=0o700)
+    captured: dict[str, Path] = {}
+    for relative, source in sorted(chosen.items()):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        owner_only(source, False)
+        # Refuse a symlink substitution between enumeration and the open.
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            with os.fdopen(fd, "rb") as stream:
+                before = os.fstat(stream.fileno())
+                require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and
+                        before.st_uid == os.getuid() and
+                        not (before.st_mode & (stat.S_IRWXG | stat.S_IRWXO)),
+                        "input changed during snapshot: " + relative)
+                with target.open("xb") as dest:
+                    shutil.copyfileobj(stream, dest, 1024 * 1024)
+                target.chmod(0o600)
+                after = os.fstat(stream.fileno())
+                current = source.lstat()
+                def identity(info: os.stat_result) -> tuple[int, ...]:
+                    return (info.st_dev, info.st_ino, info.st_size,
+                            info.st_mtime_ns, info.st_ctime_ns, info.st_mode)
+                require(identity(before) == identity(after) == identity(current),
+                        "input changed during snapshot: " + relative)
+        except BaseException:
+            # fdopen closes its own descriptor; a failure before fdopen should
+            # leave cleanup to TemporaryDirectory without touching evidence.
+            raise
+        captured[relative] = target
+    return root, captured
+
+
 def redacted_wire(src: Path, dest: Path) -> dict[str, int]:
     counts = {"in": 0, "out": 0}
     with src.open(encoding="utf-8") as stream, dest.open("x", encoding="utf-8") as output:
@@ -208,8 +245,6 @@ def manifest(root: Path, chosen: dict[str, Path], stage: Path,
                 not any(p.startswith("sessions/") for p in chosen),
                 "REPLAY ONLY archive must not contain live DSH SDK/Session records")
     elif build["location"] == "local":
-        require("log/replay-source.jsonl" not in chosen,
-                "live evidence must not bundle replay-source.jsonl")
         require(wire_name == "log/dsh-sdk-wire.jsonl" and
                 wire_name in chosen and "log/metadata.jsonl" in chosen,
                 "local live evidence requires SDK wire and metadata recorder")
@@ -219,18 +254,29 @@ def manifest(root: Path, chosen: dict[str, Path], stage: Path,
                 "log/metadata.jsonl" not in chosen and
                 not any(p.startswith("sessions/") for p in chosen),
                 "uncopied remote DSH SDK/Session logs must not be labelled local captures")
+    if mode == "live":
+        require("log/replay-source.jsonl" not in chosen,
+                "live evidence must not bundle replay-source.jsonl")
     if mode == "live" and scope == "live-functional" and build["location"] == "local":
         require(any(path.startswith("sessions/") for path in chosen),
                 "functional local run requires actual persisted Session JSONL")
+    # Snapshot hashes are fixed BEFORE redaction. Even if redaction or another
+    # thread mutates the copied input, the seal must refuse rather than claim
+    # counts from different bytes than its archived wire.
+    entries = [
+        {"path": name, "sha256": sha256(path), "bytes": path.stat().st_size}
+        for name, path in sorted(chosen.items())
+    ]
     counts: dict[str, int] = {"in": 0, "out": 0}
     redacted: Path | None = None
     if wire_name:
         redacted = stage / "redacted-wire.jsonl"
         counts = redacted_wire(chosen[wire_name], redacted)
-    entries = [
-        {"path": name, "sha256": sha256(path), "bytes": path.stat().st_size}
-        for name, path in sorted(chosen.items())
-    ]
+    for entry in entries:
+        path = chosen[entry["path"]]
+        require(path.stat().st_size == entry["bytes"] and
+                sha256(path) == entry["sha256"],
+                "input snapshot changed after redaction: " + entry["path"])
     if redacted:
         entries.append({"path": "redacted-wire.jsonl", "sha256": sha256(redacted),
                         "bytes": redacted.stat().st_size})
@@ -257,44 +303,57 @@ def manifest(root: Path, chosen: dict[str, Path], stage: Path,
 def seal(root: Path, out: Path, include_fixtures: bool) -> dict[str, Any]:
     owner_only(root, True)
     require(not out.exists() and not out.is_symlink(), "refusing archive overwrite")
-    require(out != root and root not in out.parents, "archive must be outside evidence tree")
-    # Validate *all* artifact inputs and provenance before creating seal markers.
-    chosen = collect(root, include_fixtures)
+    # Resolve the whole destination parent, including any symlinked ancestors.
+    # A lexical comparison against resolved root is NOT a containment check.
     out.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    parent = out.parent.resolve(strict=True)
+    require(parent != root and root not in parent.parents,
+            "archive must be outside evidence tree")
     require(not out.parent.is_symlink(), "symlink archive directory refused")
-    with tempfile.TemporaryDirectory(prefix=".dsh-proof-", dir=out.parent) as tmp:
-        stage = Path(tmp)
-        result, redacted = manifest(root, chosen, stage, include_fixtures)
-        marker = stage / "manifest.json"
-        marker.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n",
-                          encoding="utf-8")
-        marker.chmod(0o600)
-        archive = stage / "complete.tar.gz"
-        with tarfile.open(archive, "w:gz") as tar:
-            for relative, path in sorted(chosen.items()):
-                owner_only(path, False)
-                tar.add(path, arcname=relative, recursive=False)
-            if redacted:
-                tar.add(redacted, arcname="redacted-wire.jsonl", recursive=False)
-            tar.add(marker, arcname="manifest.json", recursive=False)
-        archive.chmod(0o600)
-        # A session can append while the archiver runs. Verify the bytes
-        # INSIDE the completed tar against the manifest before publication.
-        with tarfile.open(archive, "r:gz") as sealed:
-            for entry in result["files"]:
-                member = sealed.getmember(entry["path"])
-                stream = sealed.extractfile(member)
-                require(stream is not None and member.size == entry["bytes"],
-                        "archive member size mismatch: " + entry["path"])
-                verify = hashlib.sha256()
-                for packet in iter(lambda: stream.read(1024 * 1024), b""):
-                    verify.update(packet)
-                require(verify.hexdigest() == entry["sha256"],
-                        "evidence changed during seal: " + entry["path"])
-        # Hardlink publication is atomic and fails if the destination exists;
-        # unlike rename/replace it cannot overwrite another worker's archive.
-        os.link(archive, out, follow_symlinks=False)
-    return result
+    out = parent / out.name
+    require(not out.exists() and not out.is_symlink(), "refusing archive overwrite")
+    # Bind publication to the verified directory fd, not a path that an
+    # ancestor could redirect after containment checking.
+    directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        chosen = collect(root, include_fixtures)
+        with tempfile.TemporaryDirectory(prefix=".dsh-proof-", dir=parent) as tmp:
+            stage = Path(tmp)
+            snapshot_root, snapshot = snapshot_inputs(chosen, stage)
+            result, redacted = manifest(snapshot_root, snapshot, stage, include_fixtures)
+            marker = stage / "manifest.json"
+            marker.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n",
+                              encoding="utf-8")
+            marker.chmod(0o600)
+            archive = stage / "complete.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                for relative, path in sorted(snapshot.items()):
+                    owner_only(path, False)
+                    tar.add(path, arcname=relative, recursive=False)
+                if redacted:
+                    tar.add(redacted, arcname="redacted-wire.jsonl", recursive=False)
+                tar.add(marker, arcname="manifest.json", recursive=False)
+            archive.chmod(0o600)
+            # A staged input could mutate during redaction, hashing or tar.
+            # Verify the completed tar, not only the disk paths.
+            with tarfile.open(archive, "r:gz") as sealed:
+                for entry in result["files"]:
+                    member = sealed.getmember(entry["path"])
+                    stream = sealed.extractfile(member)
+                    require(stream is not None and member.size == entry["bytes"],
+                            "archive member size mismatch: " + entry["path"])
+                    verify = hashlib.sha256()
+                    for packet in iter(lambda: stream.read(1024 * 1024), b""):
+                        verify.update(packet)
+                    require(verify.hexdigest() == entry["sha256"],
+                            "evidence changed during seal: " + entry["path"])
+            # Exclusive hard-link publication; an existing archive is never
+            # replaced. All intermediate paths are invocation-owned.
+            os.link(archive, out.name, dst_dir_fd=directory_fd,
+                    follow_symlinks=False)
+        return result
+    finally:
+        os.close(directory_fd)
 
 
 def main() -> int:
