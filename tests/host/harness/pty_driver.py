@@ -25,7 +25,7 @@ APC = re.compile(rb"\x1b_tsp;([a-z]);(.*?)\x1b\\", re.DOTALL)
 DA1 = b"\x1b[?1;2c"
 HELLO = {
     "r": "hello", "v": 1, "term": "tern", "ver": "0.1.0",
-    "kinds": ["text", "row", "col", "card", "md", "editor", "input", "button"],
+    "kinds": ["text", "row", "col", "card", "md", "editor", "input", "el"],
     "features": ["edit", "undo", "send", "settle"],
     "apc": 4096, "credits": 16, "cols": 100,
     "cell": {"w": 8, "h": 16}, "dark": True, "reduceMotion": False,
@@ -68,6 +68,11 @@ class Driver:
         self.hello_sent = False
         self.acks: set[tuple[str, int]] = set()
         self.events: list[dict] = []
+        self.frames: list[dict] = []
+        self.actions: dict[str, str] = {}
+        self.actions_sent: list[dict] = []
+        self.captures: dict[str, dict] = {}
+        self.last_wait_end = 0
         self.started = time.monotonic()
 
     def send(self, data: bytes) -> None:
@@ -102,6 +107,20 @@ class Driver:
         else:
             self.send(DA1)
 
+    def collect_actions(self, document: object) -> None:
+        """Discover actual negotiated el(tag:button) IDs in emitted TSP docs."""
+        if not isinstance(document, dict):
+            return
+        props = document.get("p")
+        if document.get("k") == "el" and isinstance(props, dict) and props.get("tag") == "button":
+            label, ident = props.get("text"), document.get("id")
+            if isinstance(label, str) and isinstance(ident, str) and ident.startswith("layer."):
+                self.actions[label] = ident
+        children = document.get("c")
+        if isinstance(children, list):
+            for child in children:
+                self.collect_actions(child)
+
     def scan(self) -> None:
         # Inspect the actual SDK output, so credits are returned for every
         # complete frame without assuming how DSH chooses to render it.
@@ -109,16 +128,23 @@ class Driver:
         for match in APC.finditer(data, self.scanned):
             verb = match.group(1)
             self.events.append({"out": verb.decode("ascii")})
-            if verb == b"f" and self.spec.get("auto_ack", True):
+            if verb == b"f":
                 try:
                     body = json.loads(match.group(2))
-                    surface, seq = body["sf"], body["s"]
-                    ident = (surface, seq)
-                    if ident not in self.acks:
-                        self.acks.add(ident)
-                        self.send(frame("e", {"ev": "ack", "sf": surface, "s": seq}))
+                    if not isinstance(body, dict):
+                        raise ValueError("non-object TSP frame")
+                    self.frames.append(body)
+                    for op in body.get("ops", []):
+                        if isinstance(op, list) and len(op) >= 5 and op[0] == "add":
+                            self.collect_actions(op[4])
+                    if self.spec.get("auto_ack", True):
+                        surface, seq = body["sf"], body["s"]
+                        ident = (surface, seq)
+                        if ident not in self.acks:
+                            self.acks.add(ident)
+                            self.send(frame("e", {"ev": "ack", "sf": surface, "s": seq}))
                 except (UnicodeDecodeError, ValueError, KeyError, TypeError):
-                    pass  # The full wire log records the unsupported frame.
+                    pass  # Full private wire log retains the unsupported frame.
             self.scanned = match.end()
         self.handshake()
 
@@ -136,23 +162,40 @@ class Driver:
             self.raw.extend(data)
             self.scan()
 
-    def until(self, expected: str, seconds: float = 25) -> None:
+    def until(self, expected: str, seconds: float = 25, start: int = 0) -> None:
         marker = expected.encode("utf-8")
         limit = time.monotonic() + seconds
-        while marker not in self.raw:
+        while self.raw.find(marker, start) < 0:
             if self.proc.poll() is not None:
                 # A process may have terminated with unread PTY output.
                 self.pump(0.02)
-                if marker not in self.raw:
+                if self.raw.find(marker, start) < 0:
                     raise AssertionError("child exited before expected output: " + expected)
             if time.monotonic() > limit:
                 raise TimeoutError("missing PTY output: " + expected)
             self.pump(0.02)
+        self.last_wait_end = self.raw.index(marker, start) + len(marker)
 
     def steps(self) -> None:
         for step in self.spec.get("steps", []):
-            if "wait" in step:
+            if "wait_after" in step:
+                self.until(step["wait_after"], step.get("timeout_sec", 30), self.last_wait_end)
+            elif "wait" in step:
                 self.until(step["wait"], step.get("timeout_sec", 30))
+            elif "capture" in step:
+                self.captures[str(step["capture"])] = {
+                    "byte_offset": len(self.raw), "frame_count": len(self.frames),
+                }
+            elif "action" in step:
+                wanted = str(step["action"])
+                matches = [(key, value) for key, value in self.actions.items()
+                           if key == wanted or key.endswith(") " + wanted)]
+                if len(matches) != 1:
+                    raise AssertionError("expected one real native action for "
+                                         + repr(wanted) + ", found " + repr(matches))
+                label, ident = matches[0]
+                self.actions_sent.append({"label": label, "id": ident})
+                self.send(frame("e", {"ev": "action", "sf": "dsh", "id": ident, "act": "click"}))
             elif "write" in step:
                 self.send(step["write"].encode("utf-8"))
             elif "hex" in step:
@@ -194,6 +237,8 @@ class Driver:
             "acks": len(self.acks),
             "output": bytes(self.raw).decode("utf-8", errors="replace"),
             "wire_ops": self.events,
+            "actions_sent": self.actions_sent,
+            "captures": self.captures,
         }
 
     def close(self) -> None:
@@ -209,6 +254,9 @@ class Driver:
         decoded = self.root / "pty.txt"
         decoded.write_text(bytes(self.raw).decode("utf-8", errors="replace"))
         os.chmod(decoded, 0o600)
+        frames_file = self.root / "tsp-frames.json"
+        frames_file.write_text(json.dumps(self.frames, ensure_ascii=False, indent=2))
+        os.chmod(frames_file, 0o600)
 
 
 def main() -> int:
@@ -231,6 +279,8 @@ def main() -> int:
             "hello_sent": driver.hello_sent,
             "acks": len(driver.acks),
             "output": bytes(driver.raw).decode("utf-8", errors="replace"),
+            "actions_sent": driver.actions_sent,
+            "captures": driver.captures,
         }
     if failure is not None:
         result["failure"] = failure
