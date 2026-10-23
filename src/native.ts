@@ -98,6 +98,10 @@ export class NativeTerminal implements Terminal {
                 }
               }
             }
+          } else if (input.event.ev === 'resize' || input.event.ev === 'theme'
+            || input.event.ev === 'motion' || (input.event.ev === 'visible' && input.event.visible)) {
+            // The SDK already updates negotiated caps; rebuild from shared state.
+            this.render()
           } else if (input.event.ev === 'error'
             && (!input.event.sf || input.event.sf === this.surfaceId())) {
             throw new Error('Tern rejected a surface operation: ' + input.event.msg)
