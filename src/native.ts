@@ -28,7 +28,7 @@ export interface TernSDK {
 export async function connectTern(): Promise<{ sdk: TernSDK; session: TernSession } | null> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return null
   const session = await connect({ app: 'dsh', features: ['edit', 'undo', 'send'], version: '0.2.1',
-    record: process.env.DSH_TSP_RECORD_FULL })
+    record: process.env.DSH_TSP_RECORD_FULL ?? '', exitHooks: false })
   return session ? { sdk: { node }, session } : null
 }
 
@@ -156,7 +156,7 @@ export class NativeTerminal implements Terminal {
     const markdown = this.supported('md', 'text')
     return this.n(this.supported('card', 'col'), {
       key: entry.id, role: entry.kind === 'user' ? 'omp.user' : 'omp.assistant',
-    }, [this.n(markdown, { key: 'body' }, markdown === 'md' ? [entry.text || ' '] : [])])
+    }, [this.n(markdown, { key: 'body' }, [entry.text || ' '])])
   }
 
   private sendDraft(): void {
@@ -180,8 +180,7 @@ export class NativeTerminal implements Terminal {
       .map(e => this.renderEntry(e))
     if (snapshot.live && !snapshot.entries.some(e => e.id === snapshot.liveId)) {
       main.push(this.n('col', { key: snapshot.liveId ?? 'live', role: 'omp.assistant' }, [
-        this.n(this.supported('md', 'text'), { key: 'stream', stream: true },
-          this.supported('md', 'text') === 'md' ? [safeText(snapshot.live)] : []),
+        this.n(this.supported('md', 'text'), { key: 'stream', stream: true }, [safeText(snapshot.live)]),
       ]))
     }
     const editor = this.n(this.supported('editor', 'input'), {
