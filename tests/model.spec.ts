@@ -38,6 +38,16 @@ describe('single durable projection', () => {
     expect(transcript.snapshot().entries[0]?.text).toBe('durable')
   })
 
+  it('reconciles a durable surface replacement instead of replaying compacted nodes', () => {
+    const transcript = new Transcript('compacted')
+    transcript.accept({ ...ev(1, 'user/message', { content: [{ type: 'text', text: 'old' }] }), surfaceOp: 'append' })
+    transcript.accept({ ...ev(2, 'assistant/message', { message: { content: [{ type: 'text', text: 'older' }] } }), surfaceOp: 'append' })
+    transcript.accept({
+      ...ev(3, 'assistant/message', { message: { content: [{ type: 'text', text: 'summary' }] } }),
+      surfaceOp: { op: 'replace', startSeq: 1, endSeq: 2 },
+    })
+    expect(transcript.snapshot().entries.map(row => row.text)).toEqual(['summary'])
+  })
   it('bounds on-screen history and strips unsafe terminal controls', () => {
     const transcript = new Transcript('large')
     for (let i = 0; i < 300; i++) {
