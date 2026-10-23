@@ -306,6 +306,10 @@ def seal(root: Path, out: Path, include_fixtures: bool) -> dict[str, Any]:
     require(not out.exists() and not out.is_symlink(), "refusing archive overwrite")
     # Resolve the whole destination parent, including any symlinked ancestors.
     # A lexical comparison against resolved root is NOT a containment check.
+    candidate = out.parent.resolve(strict=False)
+    require(candidate != root and root not in candidate.parents,
+            "archive must be outside evidence tree")
+    # Do not even create a directory within evidence before rejecting output.
     out.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     parent = out.parent.resolve(strict=True)
     require(parent != root and root not in parent.parents,
