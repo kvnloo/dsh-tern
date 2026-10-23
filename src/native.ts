@@ -245,8 +245,10 @@ export class NativeTerminal implements Terminal {
   private renderEntry(entry: Entry): Node {
     const role = entry.kind === 'tool' || entry.kind === 'error'
       ? 'dsh.tool' : entry.kind === 'user' ? 'dsh.user' : 'dsh.assistant'
+    const markdown = entry.kind === 'assistant' || entry.kind === 'user'
+    if (!this.supported('card', 'col', 'row')) return this.textNode(entry.id, entry.text, markdown)
     return this.wrap(entry.id, role, [
-      this.textNode('body', entry.text, entry.kind === 'assistant' || entry.kind === 'user'),
+      this.textNode('body', entry.text, markdown),
     ], entry.kind === 'error' ? { tone: 'error' } : {})
   }
 
@@ -276,12 +278,14 @@ export class NativeTerminal implements Terminal {
       main.push(this.renderEntry(entry))
     }
     if (snapshot.live && !snapshot.entries.some(e => e.id === snapshot.liveId)) {
-      main.push(this.wrap(snapshot.liveId ?? 'live', 'dsh.assistant', [
-        this.textNode('stream', safeText(snapshot.live), true),
-      ]))
+      const id = snapshot.liveId ?? 'live'
+      main.push(this.supported('card', 'col', 'row')
+        ? this.wrap(id, 'dsh.assistant', [this.textNode('stream', safeText(snapshot.live), true)])
+        : this.textNode(id, safeText(snapshot.live), true))
     }
     const editorKind = this.supported('editor', 'input')
-    const status = this.textNode('label', 'dsh · ' + snapshot.sessionId + ' · ' + snapshot.status)
+    const status = this.textNode(Boolean(this.supported('row', 'col')) ? 'label' : 'status',
+      'dsh · ' + snapshot.sessionId + ' · ' + snapshot.status)
     const rowKind = this.supported('row', 'col')
     const colKind = this.supported('col', 'row', 'card')
     const dock: Node[] = [
