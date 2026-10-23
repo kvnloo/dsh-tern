@@ -99,7 +99,8 @@ TSP ev:action, act:click on a choice found from emitted el(tag:button)
 documents for a fresh allow-once request; strict Escape-cancel approval;
 ANSI question choice; native question choice and multi-select/custom
 answer; native question Escape cancellation; genuinely in-flight provider
-stream with observed live text, Ctrl-C, new turn and durable process resume.
+stream with observed live text, Ctrl-C, one durable interrupted:true partial,
+new completed turn and durable process resume.
 Every outcome is checked against the real physical Session JSONL and, for
 native, emitted SDK frame operations. No test manufactures a Session event
 or imports agent-loop internals. Existing five keyless.e2e.ts tests and
@@ -107,18 +108,31 @@ assertions are unchanged.
 
 The PTY driver now reads actual surface-frame add documents to discover
 current per-open hashed layer.request.* editor and el(tag:button) action
-IDs; it never sends historical hard-coded question paths. wait_after waits
-for a new observed byte occurrence, not a sleep. Failures keep owner-only
+IDs; it never sends historical hard-coded question paths. It reassembles
+negotiated c/m APC chunks byte-exactly before parsing, acknowledging and
+inspecting complete frames. Semantic node/after checkpoints inspect actual
+SDK add/text/property updates, stable card IDs and editor sendable/caret
+state. The fixture-only, abortable fs.watch handoff holds the real tool before
+ApprovalService takes input; the driver releases it only after composing a
+Unicode multiline draft through real PTY keys. wait_after waits for an
+observed new byte occurrence and node_after for a new semantic frame, never
+a sleep. Failures keep owner-only
 PTY bytes, decoded text, JSON frames and durable Sessions in their reported
 private workspace; success removes the entire private workspace after
 the child has exited.
 
-**Known source-contract tension, not a claimed executed RED:** src/index.ts
-maps a null answer to 'rejected' unless request.signal?.aborted, even when
-native Escape dismisses approval; the new Escape witness requires the
-distinct 'cancelled' outcome. The source belongs to TRN6-DSH-RETENTION/lead,
-NOT to this fixture slice. Do not adjust this witness to accept 'rejected'
-merely to get green.
+**Source contracts checked against current branch, not an executed GREEN:**
+The actual approval listener at packages/bundle/tui-app/src/index.ts maps
+an Escape null response to rejected when request.signal is not aborted;
+only an actual aborted signal maps to cancelled. The real Agent at
+packages/core/agent-loop/src/agent.ts:448-465 commits nonempty interrupted
+blocks with interrupted:true, while provider failures remain uncommitted.
+The tests preserve both contracts. Tool-call-only assistant messages have
+empty text, so the textual-reply oracle filters those without omitting real
+tool call/result ID checks. The original MBP source run at production
+08768d429d recorded **6/14 passing, 8/14 failing** (all five preexisting
+keyless plus the native ANSI question scenario passed); this worker did
+NOT rerun those gates and claims no corrected pass result.
 
 Lead OMP must obtain its fleet-build lock, run in the private Linux PTY
 environment off groot and record exact exit codes, not guessed pass counts:
@@ -144,3 +158,48 @@ ConPTY, daemon-retention, Windows, stress, and Hermes/OMP differential
 gates. Preserve existing strict checks and report any other RED as the
 actual API/file/observed-vs-expected behavior, not as permission to
 write outside apps/cli/tests/profiles/tui/**.
+
+## TRN8 public-gates fixture repair (connector-only; tests UNRUN)
+
+Owned changed paths: tests/public-services.e2e.ts,
+fixtures/tui-llm.ts, fixtures/tui-tools.ts and harness/pty_driver.py,
+plus this README. The registration in fixtures/cordis.yml remains the
+unchanged production ask-user/tool/LLM fixture configuration.
+
+Acceptance remains all five preexisting keyless cases plus all nine
+public-service cases, for both source and built CLI. The fixture now waits
+for *actual* new idle after its real two-turn tool result and assistant
+completion, not a streamed token. The three approval cases submit the
+trigger first, compose with real PTY keys while the real tool is blocked,
+release owned fixture state, then assert blocked/restored composer, exact
+UTF-16 caret, correlated audit, exclusive marker effects and no duplicate
+user messages. Escape sends CSI 27u. Questions wait on decoded semantic node
+text and real idle; user-only counts use source.kind=user. Ctrl-C expects
+one interrupted:true durable partial, one completed follow-up, one stable
+live/durable assistant card identity and replay after resume.
+
+No test command was run by this GitHub connector worker. The lead must
+capture exact SHA, stdout/stderr and exit code for each on a Linux PTY
+machine, with the existing private fleet lock (no provider keys):
+
+~~~sh
+git fetch origin tern/native-profile
+git switch tern/native-profile
+git rev-parse HEAD
+corepack pnpm install --frozen-lockfile --prefer-offline
+corepack pnpm run build:lib:host
+python3 -m py_compile apps/cli/tests/profiles/tui/harness/pty_driver.py
+corepack pnpm exec vitest run --config vitest.e2e.config.ts \
+  apps/cli/tests/profiles/tui/tests/keyless.e2e.ts \
+  apps/cli/tests/profiles/tui/tests/public-services.e2e.ts
+DSH_EXAMPLE_MODE=lib corepack pnpm exec vitest run --config vitest.e2e.config.ts \
+  apps/cli/tests/profiles/tui/tests/keyless.e2e.ts \
+  apps/cli/tests/profiles/tui/tests/public-services.e2e.ts
+corepack pnpm exec vitest run packages/bundle/tui-app/tests/native-pty.spec.ts \
+  packages/bundle/tui-app/tests/transport-conformance.spec.ts
+~~~
+
+Any remaining product RED needs its actual Agent/Session log, decoded
+complete TSP frames and exact src file:line reported to the separate
+production owner. No production TUI, Agent, SDK, lockfile, keyless or
+Cordis registration edits are authorized in this fixture slice.
