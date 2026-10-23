@@ -1,6 +1,7 @@
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { AnsiInputFence } from '../src/input-fence.ts'
+import { AnsiTerminal } from '../src/ansi.ts'
 
 const tick = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
 const utf8 = (value: string): Buffer => Buffer.from(value, 'utf8')
@@ -87,6 +88,33 @@ describe('SDK parser -> owned ANSI input, with no process stdin monkeypatch', ()
       stdin.off('data', nativeListener)
       fence.close()
       stdin.destroy()
+    }
+  })
+
+  it('lets real readline own and restore tty raw mode on the derived input', async () => {
+    const { stdin, fence } = fixture()
+    const stdout = Object.assign(new PassThrough(), { isTTY: true, columns: 80 })
+    const received: string[] = []
+    let terminal: AnsiTerminal | undefined
+    try {
+      const filtered = fence.activate()
+      expect(filtered.isRaw).toBe(false)
+      terminal = new AnsiTerminal({ stdin: filtered, stdout })
+      await terminal.start(text => received.push(text), () => {}, () => {})
+      expect(stdin.isRaw).toBe(true)
+      expect(filtered.isRaw).toBe(true)
+      stdin.write('one\r')
+      await tick()
+      expect(received).toEqual(['one'])
+      await terminal.closed()
+      expect(stdin.isRaw).toBe(false)
+      expect(filtered.isRaw).toBe(false)
+      expect(stdin.destroyed).toBe(false)
+    } finally {
+      await terminal?.closed()
+      fence.close()
+      stdin.destroy()
+      stdout.destroy()
     }
   })
 
