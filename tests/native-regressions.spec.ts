@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { KeyDecoder, node, type SessionInput } from '@stencil-hq/tern'
+import { KeyDecoder, node, type Node, type SessionInput } from '@stencil-hq/tern'
 import { Draft } from '../src/draft.ts'
 import { Transcript } from '../src/model.ts'
 import { NativeTerminal, type TernSDK, type TernSession, type TernSurface } from '../src/native.ts'
@@ -46,20 +46,17 @@ function terminalFixture() {
 const empty: Snapshot = {
   sessionId: 'test', status: 'idle', entries: [], live: '', notice: '', draft: '', cursor: 0,
 }
-function findEditor(frames: ReturnType<typeof terminalFixture>['frames']): {
-  readonly handlers?: { onSend?: (event: { text: string }) => void }
-} {
-  const root = frames.at(-1)!.dock
-  function visit(value: unknown): ReturnType<typeof findEditor> | undefined {
+function findEditor(frames: ReturnType<typeof terminalFixture>['frames']): Node {
+  function visit(value: unknown): Node | undefined {
     if (!value || typeof value !== 'object') return
     const item = value as { kind?: string; children?: readonly unknown[] }
-    if (item.kind === 'editor') return value
+    if (item.kind === 'editor') return value as Node
     for (const child of item.children ?? []) {
       const found = visit(child)
       if (found) return found
     }
   }
-  for (const part of root) {
+  for (const part of frames.at(-1)!.dock) {
     const found = visit(part)
     if (found) return found
   }
@@ -96,7 +93,9 @@ describe('native-profile RED behavioral witnesses against the real SDK decoder',
     const sent: string[] = []
     await f.term.start(text => sent.push(text), () => {}, () => {})
     f.term.update(empty)
-    findEditor(f.frames).handlers?.onSend?.({ text: 'first\nsecond' })
+    findEditor(f.frames).handlers?.onSend?.({
+      ev: 'send', sf: 'dsh', id: 'dock.composer.line.input', text: 'first\nsecond', raw: {},
+    })
     expect(sent).toEqual(['first\nsecond'])
     await f.term.closed()
   })
