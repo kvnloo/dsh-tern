@@ -29,6 +29,7 @@ export class AnsiTerminal implements Terminal {
   private shown = new Set<string>()
   private pending: ((text: string | null) => void) | undefined
   private lastStatus: Snapshot['status'] = 'idle'
+  private lastNotice = ''
 
   constructor(private readonly io: AnsiStreams = { stdin: process.stdin, stdout: process.stdout }) {}
 
@@ -72,6 +73,10 @@ export class AnsiTerminal implements Terminal {
     if (this.lastStatus !== snapshot.status) {
       this.lastStatus = snapshot.status
       this.io.stdout.write(snapshot.status === 'running' ? '[dsh] Working…\n' : '[dsh] Ready\n')
+    }
+    if (snapshot.notice && this.lastNotice !== snapshot.notice) {
+      this.lastNotice = snapshot.notice
+      this.io.stdout.write('[dsh] ' + safeText(snapshot.notice) + '\n')
     }
     this.input?.prompt(true)
   }
