@@ -3,6 +3,7 @@
  * imitation. The in-memory PTY is the remote terminal; the SDK is the SUT.
  */
 import { describe, expect, it, vi } from 'vitest'
+import { Draft } from '../src/draft.ts'
 import {
   connect, encodeMessage, InputParser, KeyDecoder, node, splitMessage,
   type Session, type TermInput, type TermOutput,
@@ -260,5 +261,58 @@ describe('real Tern session credit and control events', () => {
     } finally {
       await session?.close()
     }
+  })
+})
+
+
+describe('SDK post-selection byte-fence oracle (not a full ANSI PTY acceptance)', () => {
+  it('routes split late/invalid hello APC and OSC 877 away from one durable user submission', () => {
+    // This starts *after* fallback selection. The package's real ANSI stream
+    // must still be wired to this SDK-maintained parser seam by its owner.
+    const user = Buffer.concat([
+      utf8('Aé'),
+      inbound('r', hello),
+      utf8('B'),
+      inbound('r', { ...hello, v: 99 }),
+      utf8('\x1b_tsp;e;{broken-json}\x1b\\'),
+      utf8('\x1b[200~\nC🌱\x1b[201~'),
+      utf8('\x1b]877;tsp;r;' + JSON.stringify(hello) + '\x1b\\'),
+      utf8('D\r'),
+    ])
+    for (let width = 1; width <= 9; width++) {
+      const parser = new InputParser()
+      const keys = new KeyDecoder()
+      const draft = new Draft()
+      const submitted: string[] = []
+      const accept = (key: ReturnType<KeyDecoder['feed']>[number]): void => {
+        if (key.name === 'enter' && !key.shift && !key.alt) {
+          submitted.push(draft.take())
+        } else {
+          draft.key(key)
+        }
+      }
+      for (let at = 0; at < user.length; at += width) {
+        for (const result of parser.feed(user.subarray(at, at + width))) {
+          if (result.type === 'keys') for (const key of keys.feed(result.bytes)) accept(key)
+        }
+      }
+      for (const result of parser.flush()) {
+        if (result.type === 'keys') for (const key of keys.feed(result.bytes)) accept(key)
+      }
+      for (const key of keys.flush()) accept(key)
+      expect(submitted, 'chunk width=' + width).toEqual(['AéB\nC🌱D'])
+      expect(draft.text, 'chunk width=' + width).toBe('')
+    }
+  })
+
+  it('does not swallow a standalone ordinary Escape during the SDK boundary flush', () => {
+    const parser = new InputParser()
+    const keys = new KeyDecoder()
+    const decoded = [
+      ...parser.feed(utf8('\x1b')).flatMap(part => part.type === 'keys' ? keys.feed(part.bytes) : []),
+      ...parser.flush().flatMap(part => part.type === 'keys' ? keys.feed(part.bytes) : []),
+      ...keys.flush(),
+    ]
+    expect(decoded.some(key => key.name === 'escape')).toBe(true)
   })
 })
