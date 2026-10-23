@@ -153,9 +153,10 @@ def snapshot_inputs(chosen: dict[str, Path], stage: Path) -> tuple[Path, dict[st
                         before.st_uid == os.getuid() and
                         not (before.st_mode & (stat.S_IRWXG | stat.S_IRWXO)),
                         "input changed during snapshot: " + relative)
-                with target.open("xb") as dest:
+                # Create 0600 immediately; do not rely on the caller's umask.
+                with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT |
+                                       os.O_EXCL, 0o600), "wb") as dest:
                     shutil.copyfileobj(stream, dest, 1024 * 1024)
-                target.chmod(0o600)
                 after = os.fstat(stream.fileno())
                 current = source.lstat()
                 def identity(info: os.stat_result) -> tuple[int, ...]:
