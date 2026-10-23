@@ -68,6 +68,15 @@ export class Transcript {
   accept(event: SessionEvent): Entry | undefined {
     if (this.seen.has(event.seq)) return
     this.seen.add(event.seq)
+    // Session compaction/rewrite replaces the current visible surface range;
+    // replaying obsolete nodes as new history would show false duplicates.
+    if (event.surfaceOp && typeof event.surfaceOp !== 'string') {
+      const { startSeq, endSeq } = event.surfaceOp
+      this.rows = this.rows.filter(row => {
+        const seq = Number(row.id.slice('event.'.length))
+        return !(seq >= startSeq && seq <= endSeq)
+      })
+    }
     const id = 'event.' + event.seq
     let entry: Entry | undefined
     switch (event.type) {
