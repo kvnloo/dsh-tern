@@ -17,6 +17,7 @@ type Stdin = Readable & {
 
 type AnsiStdin = PassThrough & {
   readonly isTTY: boolean
+  readonly isRaw: boolean
   setRawMode(enabled: boolean): void
 }
 
@@ -54,10 +55,13 @@ export class AnsiInputFence {
   constructor(private readonly source: Stdin = process.stdin) {
     // Readline's public terminal mode stays on the derived stream; only
     // readline changes the underlying tty raw mode once ANSI is selected.
-    this.stream = Object.assign(new PassThrough(), {
+    const stream = Object.assign(new PassThrough(), {
       isTTY: source.isTTY === true,
       setRawMode: (enabled: boolean): void => { source.setRawMode?.(enabled) },
     })
+    // Readline saves its caller's previous raw mode from input.isRaw.
+    Object.defineProperty(stream, 'isRaw', { get: () => source.isRaw === true })
+    this.stream = stream as AnsiStdin
     this.stream.on('drain', this.onDrain)
     this.source.on('data', this.onData)
     this.source.once('end', this.onEnd)
