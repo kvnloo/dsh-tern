@@ -74,6 +74,10 @@ cursor and draft.
 - src/model.ts projects the durable Session log; live model deltas are
   replaceable view hints and never added as durable transcript entries.
   Its complete durable projection is never truncated by display-window limits.
+  Cancellation can retain a nonempty partial assistant reply as a durable
+  `assistant/message` with `interrupted: true`. Resume/replay preserves its
+  canonical text and identity; the shared view model labels it `Interrupted response`
+  for both ANSI and native Tern instead of presenting it as a completed reply.
 - src/services.ts reads public model, session, job, plan, todo and subagent
   registries, and routes user requests to their owning APIs, not Agent internals.
 - src/ansi.ts renders the same state using Node readline.

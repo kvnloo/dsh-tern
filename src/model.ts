@@ -122,7 +122,9 @@ export class Transcript {
         entry = {
           id: 'assistant.' + event.data.turn + '.' + event.data.step,
           kind: 'assistant',
-          text: textContent(event.data.message.content),
+          // Cancellation can durably commit a partial answer; only the display text is annotated.
+          text: (event.data.interrupted ? 'Interrupted response\n' : '')
+            + textContent(event.data.message.content),
         }
         this.preview = ''
         this.previewId = undefined

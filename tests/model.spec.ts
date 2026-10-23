@@ -57,6 +57,87 @@ describe('single durable projection', () => {
     expect(transcript.snapshot().entries).toHaveLength(3)
   })
 
+  it('retains the interrupted flag visibly after live output is committed and replayed', () => {
+    const transcript = new Transcript('cancelled-session')
+    const durable: SessionEvent<'assistant/message'> = {
+      seq: SessionSeq(2), time: 2, type: 'assistant/message', surfaceOp: 'append',
+      data: {
+        turn: 4, step: 2, interrupted: true, stream: [],
+        message: createAssistantMessage({
+          content: [{ type: 'text', text: 'Durable partial answer' }],
+          source: { provider: 'fixture', model: 'fixture' },
+        }),
+      },
+    }
+    const events: SessionEvent[] = [
+      { seq: SessionSeq(0), time: 0, type: 'turn/start', data: { turn: 4 } },
+      {
+        seq: SessionSeq(1), time: 1, type: 'user/message',
+        data: createUserMessage({ content: [{ type: 'text', text: 'question' }], source: { kind: 'user' } }),
+      },
+      durable,
+      { seq: SessionSeq(3), time: 3, type: 'turn/end', data: { turn: 4, reason: { kind: 'aborted', reason: { kind: 'user' } } } },
+    ]
+    const canonicalBeforeProjection = JSON.stringify(durable)
+    transcript.accept(events[0]!)
+    transcript.accept(events[1]!)
+    transcript.stream({ type: 'start', attemptId: 'attempt-4', revision: 1, turn: 4, step: 2 } as AssistantStreamFrame)
+    transcript.stream({
+      type: 'chunk', attemptId: 'attempt-4', revision: 2, time: 1, index: 0,
+      chunk: { type: 'text-delta', text: 'Durable partial' },
+    } as AssistantStreamFrame)
+    expect(transcript.snapshot().live).toBe('Durable partial')
+    expect(transcript.snapshot().entries).toHaveLength(1)
+
+    expect(transcript.accept(durable)).toEqual({
+      id: 'assistant.4.2', kind: 'assistant', text: 'Interrupted response\nDurable partial answer',
+    })
+    transcript.stream({
+      type: 'chunk', attemptId: 'attempt-4', revision: 3, time: 3, index: 1,
+      chunk: { type: 'text-delta', text: 'late, non-durable tail' },
+    } as AssistantStreamFrame)
+    transcript.accept(events[3]!)
+    expect(transcript.snapshot().live).toBe('')
+    expect(transcript.snapshot().liveId).toBeUndefined()
+    expect(transcript.snapshot().status).toBe('idle')
+    expect(transcript.snapshot().entries.filter(row => row.kind === 'assistant')).toEqual([
+      { id: 'assistant.4.2', kind: 'assistant', text: 'Interrupted response\nDurable partial answer' },
+    ])
+    expect(transcript.accept(durable)).toBeUndefined()
+    expect(transcript.snapshot().entries).toHaveLength(2)
+    expect(JSON.stringify(durable)).toBe(canonicalBeforeProjection)
+
+    const session = {
+      seq: events.length, eventAt: (seq: SessionSeq) => events[seq],
+    } as Parameters<Transcript['replay']>[0]
+    const resumed = new Transcript('cancelled-session')
+    resumed.replay(session)
+    expect(resumed.snapshot().entries).toEqual(transcript.snapshot().entries)
+    resumed.replay(session)
+    expect(resumed.snapshot().entries).toHaveLength(2)
+    expect(resumed.snapshot().entries.filter(row => row.id === 'assistant.4.2')).toHaveLength(1)
+    expect(JSON.stringify(durable)).toBe(canonicalBeforeProjection)
+  })
+
+  it('does not annotate an ordinary completed assistant reply', () => {
+    const transcript = new Transcript('completed-session')
+    const completed: SessionEvent<'assistant/message'> = {
+      seq: SessionSeq(0), time: 0, type: 'assistant/message', surfaceOp: 'append',
+      data: {
+        turn: 1, step: 1, stream: [],
+        message: createAssistantMessage({
+          content: [{ type: 'text', text: 'Complete answer' }],
+          source: { provider: 'fixture', model: 'fixture' },
+        }),
+      },
+    }
+    expect(transcript.accept(completed)).toEqual({
+      id: 'assistant.1.1', kind: 'assistant', text: 'Complete answer',
+    })
+    expect(transcript.snapshot().entries).toHaveLength(1)
+    expect(completed.data.interrupted).toBeUndefined()
+  })
+
   it('marks a genuinely orphaned tool interrupted when its turn ends', () => {
     const transcript = new Transcript('orphan')
     const callId = ToolCallId('orphan-call')
