@@ -30,12 +30,15 @@ export class AnsiInputFence {
   private ended = false
   private disposed = false
   private backpressured = false
+  private lastByte: number | undefined
   private idle: ReturnType<typeof setTimeout> | undefined
 
   private readonly onData = (chunk: Uint8Array | string): void => {
     if (this.disposed || this.ended) return
     this.cancelIdle()
-    this.forward(this.parser.feed(typeof chunk === 'string' ? Buffer.from(chunk) : chunk))
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+    this.lastByte = bytes.at(-1)
+    this.forward(this.parser.feed(bytes))
     this.scheduleIdle()
   }
 
@@ -43,7 +46,8 @@ export class AnsiInputFence {
     if (this.disposed || this.ended) return
     this.ended = true
     this.cancelIdle()
-    this.forward(this.parser.flush())
+    // EOF cannot make an unfinished TSP header become user text.
+    if (this.lastByte === 0x1b) this.forward(this.parser.flush())
     if (this.active) this.stream.end()
   }
 
@@ -73,9 +77,11 @@ export class AnsiInputFence {
   }
 
   private scheduleIdle(): void {
-    if (!this.active || !this.parser.pending || this.disposed || this.ended) return
-    // Like the SDK, an idle undecided Escape is released as a real key.
-    // A recognized partial TSP message stays buffered until terminated.
+    // The public SDK exposes pending but not the held-prefix classification.
+    // Only release an idle candidate ending in ESC. Flushing a split ESC_
+    // or OSC prefix would otherwise expose a partial TSP frame to readline.
+    if (!this.active || !this.parser.pending || this.disposed || this.ended
+      || this.lastByte !== 0x1b) return
     this.idle = setTimeout(() => {
       this.idle = undefined
       if (this.disposed || this.ended) return
