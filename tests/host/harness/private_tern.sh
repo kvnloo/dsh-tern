@@ -396,7 +396,7 @@ replay_ready() {
 import json,re,sys
 tree=json.dumps(json.load(open(sys.argv[1])),ensure_ascii=False)
 state=json.dumps(json.load(open(sys.argv[2])),ensure_ascii=False)
-if not re.search(r"main\\.[A-Za-z0-9]|sf-main|dsh\\.session|dsh\\.transcript",tree):
+if not re.search(r"main\.[A-Za-z0-9]|sf-main|dsh\.session|dsh\.transcript",tree):
  raise SystemExit(1)
 if not state or state=="null":
  raise SystemExit(1)
