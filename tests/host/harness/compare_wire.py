@@ -9,14 +9,16 @@ Inputs are *decoded SDK JSONL* plus provenance manifests; this tool cannot
 recover physical APC byte lengths from JSON. Both manifests must attest exact
 binary hashes, source SHA, deterministic model ID, initially empty workspace,
 independent capture IDs and original wire file SHA256. Refuses replay, missing
-or tampered evidence. Verifies q/r hello, editor capabilities, inline open,
+or tampered evidence. Verifies offered q versions/program features and selected r, inline open,
 actual recursive add-node IDs, per-open frames, cumulative ACK/credit windows,
-and no protocol errors. Does NOT test native edit/send, prompts, model quality,
+CLOSE/late ACK and no protocol errors. Does NOT test native edit/send, prompts, model quality,
 raw byte framing or functional response parity. Output is created exclusively.
 """
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 from pathlib import Path
@@ -43,6 +45,15 @@ def file_sha256(path: Path) -> str:
         for part in iter(lambda: stream.read(1 << 20), b""):
             h.update(part)
     return h.hexdigest()
+
+
+def tern_semver(value: Any, origin: str) -> str:
+    """Normalize the CLI's 'Tern 0.9.5' versus SDK r.ver '0.9.5'."""
+    require(nonempty(value), f"{origin}: Tern version missing")
+    match = re.fullmatch(r"(?i)(?:tern\\s+)?v?(\\d+\\.\\d+\\.\\d+(?:[-+][0-9a-z.-]+)?)",
+                         value.strip())
+    require(match is not None, f"{origin}: unrecognized Tern version format")
+    return match.group(1)
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -83,6 +94,7 @@ def manifest(path: Path, wire: Path) -> dict[str, Any]:
 def records(path: Path) -> list[dict[str, Any]]:
     require(path.stat().st_size <= 64 * 1024 * 1024, f"{path}: oversized startup wire")
     rows: list[dict[str, Any]] = []
+    allowed = {"q", "r", "o", "f", "e", "x", "b", "error"}
     with path.open(encoding="utf-8") as stream:
         for line_no, line in enumerate(stream, 1):
             if not line.strip():
@@ -93,8 +105,22 @@ def records(path: Path) -> list[dict[str, Any]]:
             except json.JSONDecodeError as error:
                 raise ValueError(f"{path}:{line_no}: {error}") from error
             require(isinstance(row, dict) and row.get("dir") in ("in", "out") and
-                    nonempty(row.get("verb")) and isinstance(row.get("body"), dict),
-                    f"{path}:{line_no}: SDK dir, verb and object body required")
+                    row.get("verb") in allowed,
+                    f"{path}:{line_no}: invalid SDK direction/verb")
+            verb, body = row["verb"], row.get("body")
+            if verb == "b":
+                params = row.get("params")
+                require(row["dir"] == "out" and isinstance(body, str) and
+                        isinstance(params, dict) and nonempty(params.get("id")) and
+                        nonempty(params.get("mime")),
+                        f"{path}:{line_no}: invalid SDK blob body/params")
+                try:
+                    base64.b64decode(body, validate=True)
+                except (ValueError, binascii.Error) as error:
+                    raise ValueError(f"{path}:{line_no}: malformed blob base64") from error
+            else:
+                require(isinstance(body, dict),
+                        f"{path}:{line_no}: SDK {verb} body must be an object")
             rows.append(row)
     require(bool(rows), f"{path}: empty wire")
     return rows
@@ -117,85 +143,114 @@ def surface(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
     hello: dict[str, Any] | None = None
     opens: dict[str, dict[str, Any]] = {}
     discovered: set[str] = set()
-    counts = {"q": 0, "r": 0, "o": 0, "f": 0, "ack": 0}
+    counts = {"q": 0, "r": 0, "o": 0, "f": 0, "ack": 0, "b": 0, "x": 0}
     for index, record in enumerate(rows):
         direction, verb, body = record["dir"], record["verb"], record["body"]
-        if verb == "e" and body.get("ev") == "error" or verb in ("error", "x"):
+        if verb == "error" or (verb == "e" and body.get("ev") == "error"):
             raise ValueError(f"{name}: TSP protocol error at record {index}")
         if (direction, verb) == ("out", "q"):
             require(query is None and hello is None and not opens,
                     f"{name}: repeated/late q hello")
-            require(body.get("q") == "hello" and body.get("v") == 1,
-                    f"{name}: wrong q hello/version")
+            versions = body.get("v")
+            features = body.get("features")
+            require(body.get("q") == "hello" and isinstance(versions, list) and
+                    versions and all(type(v) is int and v > 0 for v in versions) and
+                    len(set(versions)) == len(versions) and nonempty(body.get("app")) and
+                    isinstance(body.get("ver"), str) and isinstance(features, list) and
+                    all(nonempty(x) for x in features) and
+                    {"edit", "undo", "send"} <= set(features),
+                    f"{name}: invalid SDK q versions/program editor/send offers")
             query = body
             counts["q"] += 1
         elif (direction, verb) == ("in", "r"):
             require(query is not None and hello is None and not opens,
                     f"{name}: r hello without its prior q")
-            require(body.get("r") == "hello" and body.get("v") == 1 and
-                    body.get("term") == "tern" and nonempty(body.get("ver")),
+            require(body.get("r") == "hello" and type(body.get("v")) is int and
+                    body["v"] in query["v"] and body.get("term") == "tern" and
+                    nonempty(body.get("ver")),
                     f"{name}: incompatible r hello")
             kinds, features = body.get("kinds"), body.get("features")
-            require(isinstance(kinds, list) and "editor" in kinds and
-                    isinstance(features, list) and {"edit", "send"} <= set(
-                        x for x in features if isinstance(x, str)),
-                    f"{name}: negotiated native editor/send capabilities absent")
+            require(isinstance(kinds, list) and
+                    {"editor", "input"} <= set(x for x in kinds if isinstance(x, str)) and
+                    isinstance(features, list) and all(nonempty(x) for x in features),
+                    f"{name}: negotiated native editor/input kinds absent")
             require(type(body.get("credits")) is int and body["credits"] > 0,
                     f"{name}: invalid initial credit limit")
             require(type(body.get("apc")) is int and body["apc"] > 0,
                     f"{name}: invalid negotiated APC limit")
             hello = body
             counts["r"] += 1
+        elif (direction, verb) == ("out", "b"):
+            require(hello is not None, f"{name}: blob before negotiation")
+            counts["b"] += 1
         elif (direction, verb) == ("out", "o"):
             require(hello is not None, f"{name}: open before successful hello")
             ident = body.get("sf", body.get("id"))
             require(nonempty(ident) and body.get("mode") == "inline",
                     f"{name}: expected real inline surface open")
             require(ident not in opens, f"{name}: repeated surface open in startup capture")
-            opens[ident] = {"seq": 0, "acked": 0, "frames": 0, "ids": set()}
+            opens[ident] = {
+                "seq": 0, "acked": 0, "frames": 0, "ids": set(),
+                "closed": False, "close_keep": None,
+            }
             counts["o"] += 1
         elif (direction, verb) == ("out", "f"):
             ident, seq, ops = body.get("sf"), body.get("s"), body.get("ops")
             require(isinstance(ident, str) and ident in opens,
                     f"{name}: frame for unopened surface")
             state = opens[ident]
+            require(not state["closed"], f"{name}: frame emitted after surface close")
             require(type(seq) is int and seq == state["seq"] + 1,
                     f"{name}: nonmonotonic per-open frame sequence")
             require(isinstance(ops, list), f"{name}: malformed frame ops")
             for op in ops:
-                require(isinstance(op, list) and nonempty(op[0] if op else None),
+                require(isinstance(op, list) and op and nonempty(op[0]),
                         f"{name}: malformed operation")
                 if op[0] == "add":
                     require(len(op) == 5, f"{name}: malformed add operation")
                     recursive_ids(op[4], state["ids"], name)
                 elif op[0] == "text":
-                    # SDK wire Op text has exactly 3 fields [text, nodeId, value].
-                    require(len(op) == 3 and nonempty(op[1]) and isinstance(op[2], str),
-                            f"{name}: malformed 3-field text operation")
+                    require(len(op) == 4 and nonempty(op[1]) and
+                            op[2] in ("replace", "append") and isinstance(op[3], str),
+                            f"{name}: malformed 4-field text operation")
                 elif op[0] in ("set", "props", "del", "move", "settle"):
                     require(len(op) >= 2 and nonempty(op[1]),
                             f"{name}: operation lacks target ID")
+                else:
+                    raise ValueError(f"{name}: unsupported operation {op[0]!r}")
             state["seq"] = seq
             state["frames"] += 1
             require(state["seq"] - state["acked"] <= hello["credits"],
                     f"{name}: frame credit overrun ({ident})")
             counts["f"] += 1
+        elif (direction, verb) == ("out", "x"):
+            ident = body.get("id", body.get("sf"))
+            require(nonempty(ident) and ident in opens and
+                    type(body.get("keep")) is bool,
+                    f"{name}: malformed or unowned CLOSE")
+            state = opens[ident]
+            require(not state["closed"], f"{name}: repeated surface CLOSE")
+            state["closed"] = True
+            state["close_keep"] = body["keep"]
+            counts["x"] += 1
         elif (direction, verb) == ("in", "e") and body.get("ev") == "ack":
             ident, seq = body.get("sf"), body.get("s")
             require(isinstance(ident, str) and ident in opens,
                     f"{name}: ACK for unopened surface")
             state = opens[ident]
+            # The terminal can drain an already-in-flight ACK after an x CLOSE.
             require(type(seq) is int and state["acked"] < seq <= state["seq"],
                     f"{name}: replayed, regressed or future cumulative ACK")
             state["acked"] = seq
             counts["ack"] += 1
-        elif verb in ("q", "r", "o", "f") and direction != {
-            "q": "out", "r": "in", "o": "out", "f": "out",
-        }[verb]:
+        elif (direction, verb) == ("in", "e"):
+            require(nonempty(body.get("ev")),
+                    f"{name}: malformed inbound event")
+        elif verb in ("q", "r", "o", "f", "x", "b", "e"):
             raise ValueError(f"{name}: wrong TSP direction for {verb}")
     require(query is not None and hello is not None and bool(opens) and
-            counts["f"] > 0 and counts["ack"] > 0,
-            f"{name}: startup q/r/open/frames/cumulative ACK evidence incomplete")
+            counts["f"] > 0 and counts["ack"] > 0 and counts["x"] == len(opens),
+            f"{name}: complete startup q/r/open/frames/ACK/CLOSE evidence missing")
     for ident, state in opens.items():
         require(bool(state["ids"]), f"{name}: surface {ident} has no actual node.id")
         discovered.update(state["ids"])
@@ -204,10 +259,13 @@ def surface(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
         "hello": {key: hello[key] for key in ("v", "term", "ver", "kinds",
                                             "features", "credits", "apc")},
         "counts": counts,
-        "per_open": {key: {"frames": state["frames"], "acked": state["acked"],
-                           "last_sequence": state["seq"],
-                           "semantic_ids": sorted(state["ids"])}
-                     for key, state in opens.items()},
+        "per_open": {
+            key: {"frames": state["frames"], "acked": state["acked"],
+                  "last_sequence": state["seq"], "closed": state["closed"],
+                  "close_keep": state["close_keep"],
+                  "semantic_ids": sorted(state["ids"])}
+            for key, state in opens.items()
+        },
         "real_node_ids": sorted(discovered),
     }
 
@@ -226,6 +284,10 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
             "different explicit deterministic model IDs")
     dsh = surface(records(args.dsh), "dsh")
     peer = surface(records(args.peer), "peer")
+    for label, meta, capture in (("dsh", dsh_meta, dsh), ("peer", peer_meta, peer)):
+        require(tern_semver(meta["tern_version"], label + " manifest") ==
+                tern_semver(capture["hello"]["ver"], label + " SDK reply"),
+                f"{label}: sealed Tern version does not match live r.ver")
     differences = []
     if dsh["query_v"] != peer["query_v"] or dsh["hello"] != peer["hello"]:
         differences.append("q/r negotiated protocol/capabilities differ")
