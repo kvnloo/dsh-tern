@@ -42,7 +42,7 @@ export function textContent(content: readonly unknown[]): string {
   }).join(''))
 }
 
-/** One session's bounded on-screen projection. The underlying Session retains all history. */
+/** One session's current durable projection. Only ordinary snapshots are windowed. */
 export class Transcript {
   readonly sessionId: string
   private lastSequence = -1
@@ -76,11 +76,9 @@ export class Transcript {
     if (at < 0) this.rows.push(entry)
     else this.rows[at] = entry
     this.rowSequence.set(entry.id, seq)
-    while (this.rows.length > MAX_ENTRIES) {
-      const removed = this.rows.shift()!
-      this.rowSequence.delete(removed.id)
-      this.runningTools.delete(removed.id)
-    }
+    // Only an acknowledged renderer eviction can release presentation caches.
+    // Never discard durable identities merely because the viewport is long.
+
   }
 
   accept(event: SessionEvent): Entry | undefined {
@@ -176,10 +174,14 @@ export class Transcript {
     this.currentDraft = text
     this.currentCursor = cursor
   }
-  snapshot(): Snapshot {
+  /**
+   * Ordinary snapshots cap screen work; the interactive renderer requests the
+   * complete durable projection so history is never silently erased.
+   */
+  snapshot(options: { all?: boolean } = {}): Snapshot {
     return {
       sessionId: this.sessionId,
-      entries: [...this.rows],
+      entries: options.all ? [...this.rows] : this.rows.slice(-MAX_ENTRIES),
       live: this.preview,
       ...(this.previewId ? { liveId: this.previewId } : {}),
       ...(this.lastSequence >= 0 ? { latestSeq: this.lastSequence } : {}),

@@ -131,7 +131,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
       ? new NativeTerminal(connected.sdk, connected.session)
       : new AnsiTerminal()
     const display = terminal
-    const show = (): void => display.update(transcript.snapshot())
+    const show = (): void => display.update(transcript.snapshot({ all: true }))
     const interrupt = (): void => {
       if (agent.status === 'running') {
         agent.cancel({ kind: 'user' })
