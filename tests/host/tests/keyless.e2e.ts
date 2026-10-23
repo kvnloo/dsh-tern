@@ -308,7 +308,7 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 keyless shipped CLI throug
         { write: json.slice(0, 9) },
         { write: json.slice(9) + '\x1b\\' },
         // A plain Escape must remain a key; a split UTF-8 scalar must survive.
-        { hex: '1b' }, { sleep_ms: 85 },
+        { hex: '1b' }, { sleep_ms: 650 },
         { hex: 'f09f' }, { hex: '8cb1' },
         { write: 'post\r' },
         { wait: '[dsh] echo: ' + intended },
