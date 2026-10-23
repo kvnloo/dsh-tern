@@ -311,7 +311,7 @@ function expectRestoredComposer(run: PtyResult): void {
 
 const nativeDraft: Step[] = [
   { write: 'α😀' },
-  { hex: '1b5b3230307e' }, { write: '\\nsecondZ' }, { hex: '1b5b3230317e' },
+  { hex: '1b5b3230307e' }, { write: '\nsecondZ' }, { hex: '1b5b3230317e' },
   { node: { id: 'dock.composer.line.input', text: draftText } },
   { hex: '1b5b44' }, // real SDK Left: caret immediately before Z
   { node_after: {
@@ -324,6 +324,39 @@ const nativeSend = (text: string): Step => ({
 })
 const nativeExit: Step = { write: '/quit\r' }
 
+/**
+ * The submitted request is already running in the real ToolService, held by
+ * the owned fixture barrier. Only then do real PTY keys compose the draft.
+ */
+function approvalSetup(request: string): Step[] {
+  return [
+    { wait: '\x1b_tsp;o;' },
+    nativeSend(request),
+    { node: { contains: 'Running tui_fixture_effect' } },
+    ...nativeDraft,
+    { release_approval: true },
+    { node_after: { contains: 'Allow once: tui_fixture_effect?' } },
+    { capture: 'blocked' },
+  ]
+}
+
+function approvalFinish(outcome: 'allowed' | 'rejected'): Step[] {
+  return [
+    { node_after: { contains: 'Tool result: approval ' + outcome } },
+    { node_after: { id: 'dock.status.label', contains: ' · idle' } },
+    { node: {
+      id: 'dock.composer.line.input', text: draftText,
+      cursor: draftCaret, sendable: true,
+    } },
+    { capture: 'restored' },
+    { write: '!' }, { hex: '0d' },
+    { node_after: { contains: 'echo: α' } },
+    { node_after: { id: 'dock.status.label', contains: ' · idle' } },
+    nativeExit,
+  ]
+}
+
+
 describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyless acceptance over shipped PTY', () => {
   it('renders start/output/completion from real tool execution on ANSI, distinct across consecutive calls', () =>
     workspace('ansi-tool', async dir => {
@@ -334,11 +367,11 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
         { wait: 'Tool result: DSH_TUI_FIXTURE_OK' },
         { wait_after: '[dsh] tool settled' },
         { wait_after: '[dsh] Ready' },
-        { write: '[tool]\\r' },
+        { write: '[tool]\r' },
         { wait_after: 'Tool result: DSH_TUI_FIXTURE_OK' },
         { wait_after: '[dsh] tool settled' },
         { wait_after: '[dsh] Ready' },
-        { write: '/quit\\r' },
+        { write: '/quit\r' },
       ])
       expect(run.exit_code, run.output).toBe(0)
       const log = await history(dir)
@@ -398,40 +431,31 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
   it('denies a real public approval by keyboard without executing its effect or losing a Unicode/multiline caret', () =>
     workspace('approval-deny', async dir => {
       const run = await execute(dir, 'native-denied', 'native', [
-        ...nativeDraft,
-        nativeSend('[approval-deny]'),
-        { wait: 'Allow once: tui_fixture_effect?' },
-        { capture: 'blocked' },
+        ...approvalSetup('[approval-deny]'),
         { write: '2' }, // native PTY keyboard: Deny
-        { wait: 'Tool result: approval rejected' },
-        { write: '!' }, { hex: '0d' },
-        { wait: 'echo: α' },
-        nativeExit,
+        ...approvalFinish('rejected'),
       ])
       expect(run.exit_code, run.output).toBe(0)
       expectBlockedComposer(run)
+      expectRestoredComposer(run)
       const log = await history(dir)
       expect(users(log)).toEqual(['[approval-deny]', 'α😀\nsecond!Z'])
       approvalPair(log, 'rejected')
       expect(toolOutput(toolPairs(log)[0]!)).toBe('approval rejected')
+      expect(await readFile(join(dir, 'approval-waiting.barrier'), 'utf8')).toBe('waiting\n')
       expect(await markerExists(dir)).toBe(false)
     }), 160_000)
 
   it('accepts a fresh real negotiated el(button) ACTION through ApprovalService, not a forged event', () =>
     workspace('approval-allow', async dir => {
       const run = await execute(dir, 'native-allowed', 'native', [
-        ...nativeDraft,
-        nativeSend('[approval-allow]'),
-        { wait: 'Allow once: tui_fixture_effect?' },
-        { capture: 'blocked' },
-        { action: 'Allow once' }, // PTY driver resolves exact active SDK id from emitted doc
-        { wait: 'Tool result: approval allowed' },
-        { write: '!' }, { hex: '0d' },
-        { wait: 'echo: α' },
-        nativeExit,
+        ...approvalSetup('[approval-allow]'),
+        { action: 'Allow once' }, // resolved from active, emitted el(tag:button)
+        ...approvalFinish('allowed'),
       ])
       expect(run.exit_code, run.output).toBe(0)
       expectBlockedComposer(run)
+      expectRestoredComposer(run)
       expect(run.actions_sent).toHaveLength(1)
       expect(run.actions_sent![0]!.label).toMatch(/Allow once$/)
       expect(run.actions_sent![0]!.id).toMatch(/^layer\.request\./)
@@ -439,27 +463,25 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
       expect(users(log)).toEqual(['[approval-allow]', 'α😀\nsecond!Z'])
       approvalPair(log, 'allowed-once')
       expect(toolOutput(toolPairs(log)[0]!)).toBe('approval allowed')
+      expect(await readFile(join(dir, 'approval-waiting.barrier'), 'utf8')).toBe('waiting\n')
       expect(await readFile(join(dir, 'approval-allowed.marker'), 'utf8')).toBe('allowed-once\n')
     }), 160_000)
 
-  it('treats explicit Escape as cancelled (strict RED if the public approval owner maps it to reject)', () =>
+  it('maps negotiated kitty Escape to real ApprovalService rejection without an abort signal', () =>
     workspace('approval-cancel', async dir => {
       const run = await execute(dir, 'native-cancelled', 'native', [
-        ...nativeDraft,
-        nativeSend('[approval-cancel]'),
-        { wait: 'Allow once: tui_fixture_effect?' },
-        { capture: 'blocked' },
-        { hex: '1b' }, // Esc, not a fabricated abort signal
-        { wait: 'Tool result: approval cancelled' },
-        { write: '!' }, { hex: '0d' },
-        { wait: 'echo: α' },
-        nativeExit,
+        ...approvalSetup('[approval-cancel]'),
+        { hex: '1b5b323775' }, // CSI 27u, actual kitty Escape, not ambiguous lone ESC
+        ...approvalFinish('rejected'),
       ])
       expect(run.exit_code, run.output).toBe(0)
       expectBlockedComposer(run)
+      expectRestoredComposer(run)
       const log = await history(dir)
-      approvalPair(log, 'cancelled')
+      approvalPair(log, 'rejected')
       expect(users(log)).toEqual(['[approval-cancel]', 'α😀\nsecond!Z'])
+      expect(toolOutput(toolPairs(log)[0]!)).toBe('approval rejected')
+      expect(await readFile(join(dir, 'approval-waiting.barrier'), 'utf8')).toBe('waiting\n')
       expect(await markerExists(dir)).toBe(false)
     }), 160_000)
 
