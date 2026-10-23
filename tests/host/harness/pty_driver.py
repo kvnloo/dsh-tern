@@ -170,9 +170,6 @@ class Driver:
                 os.killpg(self.proc.pid, signal.SIGWINCH)
             elif "signal" in step:
                 os.killpg(self.proc.pid, getattr(signal, step["signal"]))
-            elif "eof" in step:
-                os.close(self.master)
-                self.master = -1
             else:
                 raise ValueError("unknown PTY step: " + repr(step))
 

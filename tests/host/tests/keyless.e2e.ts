@@ -30,7 +30,6 @@ type Step =
   | { sleep_ms: number }
   | { resize: [number, number] }
   | { signal: 'SIGINT' | 'SIGTERM' | 'SIGHUP' }
-  | { eof: true }
 
 interface PtyResult {
   readonly exit_code: number | null
@@ -276,12 +275,12 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 keyless shipped CLI throug
     }
   }, 100_000)
 
-  it('handles ANSI PTY EOF and native SIGTERM without leaving the terminal held', async () => {
+  it('handles ANSI Ctrl-D EOF and native SIGTERM without leaving the terminal held', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'dsh-tui-terminal-end-'))
     await chmod(dir, 0o700)
     try {
       const eof = await execute(dir, 'ansi-eof', 'ansi', [
-        { wait: 'dsh TUI (ANSI)' }, { eof: true },
+        { wait: 'dsh TUI (ANSI)' }, { hex: '04' },
       ], { nativeDisabled: true, timeoutSec: 15 })
       expect(eof.exit_code, eof.output).toBe(0)
       const signalled = await execute(dir, 'native-term', 'native', [

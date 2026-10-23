@@ -29,7 +29,7 @@ class TuiFixtureAdapter extends LlmAdapter {
     const last = options.messages.findLastIndex(message =>
       message.role === 'user' && message.source?.kind === 'user')
     const turn = options.messages.slice(last)
-    const text = turn.filter(message => message.role === 'user')
+    const text = turn.filter(message => message.role === 'user' && message.source?.kind === 'user')
       .flatMap(message => message.content.flatMap(block => block.type === 'text' ? [block.text] : []))
       .join('\n')
     if (text.includes('[failure]')) {
