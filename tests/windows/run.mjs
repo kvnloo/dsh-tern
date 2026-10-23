@@ -296,18 +296,24 @@ async function nativeOne(sandbox) {
     peer.write('\r')
     await waitNode(peer, { contains: 'echo: xyz' },
       'real Agent first native reply', before)
+    await waitNode(peer, { id: 'dock.status.label', contains: ' · idle' },
+      'first Agent turn settled', before)
     before = peer.frames.length
     peer.sendOsc877('e', {
       ev: 'send', sf: 'dsh', id: 'dock.composer.line.input', text: 'atomic\nsend',
     })
     await waitNode(peer, { contains: 'echo: atomic' },
       'OSC877 atomic native multiline send', before)
+    await waitNode(peer, { id: 'dock.status.label', contains: ' · idle' },
+      'atomic send turn settled', before)
     before = peer.frames.length
     peer.sendOsc877('e', {
       ev: 'send', sf: 'dsh', id: 'dock.composer.line.input', text: '[tool]',
     })
     await waitNode(peer, { contains: 'Tool result: DSH_TUI_FIXTURE_OK' },
       'real ToolService execution and stable native card', before, 60_000)
+    await waitNode(peer, { id: 'dock.status.label', contains: ' · idle' },
+      'tool Agent turn settled', before, 60_000)
     const beforeQuit = durable(sandbox)
     assertExact(beforeQuit.users, ['xyz😀\nsecond line', 'atomic\nsend', '[tool]'], 'native send-once')
     assertExact(beforeQuit.assistants, [
@@ -350,6 +356,8 @@ async function nativeResume(sandbox, sessionId) {
     peer.write('after-resume\r')
     await waitNode(peer, { contains: 'echo: after-resume' },
       'Agent reply after recovered native surface', before)
+    await waitNode(peer, { id: 'dock.status.label', contains: ' · idle' },
+      'resumed Agent turn settled', before)
     const saved = durable(sandbox)
     requireGate(saved.id === sessionId, 'real persisted Session ID changed across process restart')
     assertExact(saved.users, ['xyz😀\nsecond line', 'atomic\nsend', '[tool]', 'after-resume'],
@@ -443,6 +451,8 @@ async function nativeErrorRecovery(sandbox) {
     recovered.write('new-child-after-error\r')
     await waitNode(recovered, { contains: 'echo: new-child-after-error' },
       'reopened child after native SDK failure', before)
+    await waitNode(recovered, { id: 'dock.status.label', contains: ' · idle' },
+      'recovered child Agent turn settled', before)
     await finishNative(recovered)
     return { crashExitCode: crashExit, recoveryExitCode: recovered.exit.code,
       transport: recovered.stats() }
