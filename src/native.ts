@@ -6,6 +6,7 @@ import { connect, node, type Key, type Node, type OpenOptions, type SessionInput
 import { abortableAnswer, type Ask, type Terminal } from './terminal.ts'
 import { Draft, type NativeEdit } from './draft.ts'
 import { safeText, type Entry, type Snapshot } from './model.ts'
+import { TspRecorder } from './record.ts'
 
 export interface TernSurface {
   readonly closed: boolean
@@ -17,7 +18,7 @@ export type TernInput = SessionInput
 export interface TernSession extends AsyncIterable<SessionInput> {
   open(options: OpenOptions): TernSurface
   close(): Promise<void>
-  readonly caps?: { readonly kinds: readonly string[]; readonly features: readonly string[] }
+  readonly caps?: { readonly kinds: readonly string[]; readonly features: readonly string[]; readonly credits?: number; readonly apc?: number }
 }
 export interface TernSDK {
   readonly node: typeof node
@@ -49,6 +50,8 @@ export class NativeTerminal implements Terminal {
   private stopped = false
   private readonly gone = new Set<string>()
   private readonly settled = new Set<string>()
+  private revision = 0
+  private recorder: TspRecorder | undefined
 
   constructor(private readonly sdk: TernSDK, private readonly session: TernSession) {
     this.surface = this.openSurface()
@@ -73,6 +76,11 @@ export class NativeTerminal implements Terminal {
       try {
         for await (const input of this.session) {
           if (this.stopped) break
+          this.recorder?.write({
+            direction: 'in', verb: input.type === 'key' ? 'key' : input.event.ev,
+            parsedBytes: JSON.stringify(input).length, surfaceId: this.surfaceId(),
+            revision: this.revision,
+          })
           if (input.type === 'key') this.key(input.key)
           else if (input.event.ev === 'gone') {
             if (input.event.ids.includes(this.surfaceId())) {
@@ -237,6 +245,16 @@ export class NativeTerminal implements Terminal {
       ]))
     }
     this.surface.render({ main, dock, layer })
+    this.revision += 1
+    this.recorder?.write({
+      direction: 'out', verb: 'render', parsedBytes: JSON.stringify({
+        main: main.map(node => node.toJSON()), dock: dock.map(node => node.toJSON()),
+        layer: layer.map(node => node.toJSON()),
+      }).length,
+      surfaceId: this.surfaceId(), revision: this.revision,
+      eventSeq: snapshot.latestSeq,
+      ...(this.session.caps ? { caps: this.session.caps } : {}),
+    })
     this.surface.focus(this.prompt ? ANSWER : EDITOR)
     if (this.session.caps?.features.includes('settle') && this.surface.settle) {
       for (const entry of snapshot.entries) {
@@ -251,6 +269,7 @@ export class NativeTerminal implements Terminal {
 
   update(snapshot: Snapshot): void {
     this.last = snapshot
+    this.recorder ??= new TspRecorder(process.env.DSH_TSP_RECORD, snapshot.sessionId)
     if (!this.prompt && !this.draft.text && snapshot.draft) {
       this.draft.restore(snapshot.draft, snapshot.cursor)
     }
