@@ -19,6 +19,7 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import { AnsiTerminal } from './ansi.ts'
+import { AnsiInputFence } from './input-fence.ts'
 import { ResourceStack } from './lifecycle.ts'
 import { Transcript } from './model.ts'
 import { connectTern, NativeTerminal } from './native.ts'
@@ -81,6 +82,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
   const id = brandString<SessionId>(config.sessionId ?? 'session-' + randomUUID())
   let handle: AgentHandle | undefined
   let terminal: Terminal | undefined
+  let inputFence: AnsiInputFence | undefined
   let connected: Awaited<ReturnType<typeof connectTern>> = null
   let stopping = false
   let failed: unknown
@@ -137,10 +139,18 @@ async function run(ctx: Context, config: Config): Promise<void> {
       release.add(() => { process.off(signal, stopOnSignal) })
     }
 
+    // Tap before the SDK probe, so ordinary keys consumed during handshake and
+    // any partially received TSP frame keep their ownership on ANSI fallback.
+    inputFence = new AnsiInputFence()
     connected = config.native === false ? null : await connectTern(id)
+    if (connected) {
+      // Native keeps the SDK's original in-band key stream; never replay a tap.
+      inputFence.close()
+      inputFence = undefined
+    }
     terminal = connected
       ? new NativeTerminal(connected.sdk, connected.session, connected.recorder)
-      : new AnsiTerminal()
+      : new AnsiTerminal({ stdin: inputFence!.activate(), stdout: process.stdout })
     const display = terminal
     let switching = false
     const show = (): void => display.update(transcript.snapshot({
@@ -397,6 +407,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
     if (handle?.agent.status === 'running') handle.agent.cancel({ kind: 'disposed' })
     if (terminal) await cleanup(() => terminal!.closed())
     else if (connected) await cleanup(() => connected!.session.close())
+    if (inputFence) await cleanup(() => inputFence!.close())
     if (handle) {
       await cleanup(() => handle!.agent.whenIdle())
       await cleanup(async () => { await sessions.flush(handle!.agent.session) })
