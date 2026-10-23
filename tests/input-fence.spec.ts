@@ -61,6 +61,8 @@ describe('SDK parser -> owned ANSI input, with no process stdin monkeypatch', ()
     try {
       stdin.write('P\x1b_')
       fence.activate().on('data', (chunk: Buffer) => seen.push(Buffer.from(chunk)))
+      // Exceed the SDK's usual 30-ms idle flush while the header is split.
+      await new Promise(resolve => setTimeout(resolve, 70))
       stdin.write('tsp;r;{"r":"hello","v":99}\x1b\\Q')
       await tick()
       expect(Buffer.concat(seen)).toEqual(utf8('PQ'))
