@@ -9,6 +9,7 @@ export interface Ask {
   readonly title: string
   readonly detail?: string
   readonly choices?: readonly Choice[]
+  readonly multiple?: boolean
   readonly signal?: AbortSignal
 }
 export interface Terminal {
