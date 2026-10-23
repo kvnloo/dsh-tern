@@ -184,7 +184,7 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 keyless shipped CLI throug
       expect(users(initial)).toEqual(['alpha', 'beta', '[failure]'])
       expect(assistants(initial)).toEqual(['echo: alpha', 'echo: beta'])
       expect(initial.events.some(event => event.type === 'turn/end')).toBe(true)
-      expect(JSON.stringify(initial.events)).not.toContain('speculative, must not commit')
+      expect(initial.events.some(event => event.type === 'assistant/attempt')).toBe(true)
 
       const resumed = await execute(dir, 'ansi-resume', 'ansi', [
         { wait: 'dsh TUI (ANSI)' },
@@ -194,6 +194,7 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 keyless shipped CLI throug
         { write: '/quit\r' },
       ], { shorthand: true, nativeDisabled: true, sessionId: initial.id })
       expect(resumed.exit_code, resumed.output).toBe(0)
+      expect(resumed.output).not.toContain('speculative, must not commit')
       const after = await durable(dir)
       expect(after.id).toBe(initial.id)
       expect(users(after)).toEqual(['alpha', 'beta', '[failure]', 'gamma'])
@@ -280,7 +281,7 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 keyless shipped CLI throug
     await chmod(dir, 0o700)
     try {
       const eof = await execute(dir, 'ansi-eof', 'ansi', [
-        { wait: 'dsh TUI (ANSI)' }, { hex: '04' },
+        { wait: 'dsh> ' }, { hex: '04' },
       ], { nativeDisabled: true, timeoutSec: 15 })
       expect(eof.exit_code, eof.output).toBe(0)
       const signalled = await execute(dir, 'native-term', 'native', [
