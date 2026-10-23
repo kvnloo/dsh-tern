@@ -74,7 +74,7 @@ class Driver:
         self.wire_errors: list[str] = []
         self.nodes: dict[str, dict] = {}
         self.node_changes: list[dict] = []
-        self.last_frame_end = 0
+        self.last_change_end = 0
         self.actions: dict[str, str] = {}
         self.answer_id: str | None = None
         self.actions_sent: list[dict] = []
@@ -180,7 +180,7 @@ class Driver:
     def note_node(self, ident: str, frame_index: int) -> None:
         node = self.nodes[ident]
         self.node_changes.append({
-            "frame_index": frame_index, "id": ident,
+            "frame_index": frame_index, "position": len(self.node_changes), "id": ident,
             "k": node["k"], "p": dict(node["p"]),
         })
 
@@ -249,7 +249,7 @@ class Driver:
     def until_node(self, wanted: dict, seconds: float = 30, after: int = 0) -> None:
         """Wait for actual semantic node content/props, not quoted JSON bytes."""
         def matches(change: dict) -> bool:
-            if change["frame_index"] < after:
+            if change["position"] < after:
                 return False
             if "id" in wanted and wanted["id"] != change["id"]:
                 return False
@@ -265,7 +265,7 @@ class Driver:
         while True:
             for change in self.node_changes:
                 if matches(change):
-                    self.last_frame_end = change["frame_index"] + 1
+                    self.last_change_end = change["position"] + 1
                     return
             if self.proc.poll() is not None:
                 self.pump(0.02)
@@ -306,7 +306,7 @@ class Driver:
     def steps(self) -> None:
         for step in self.spec.get("steps", []):
             if "node_after" in step:
-                self.until_node(step["node_after"], step.get("timeout_sec", 30), self.last_frame_end)
+                self.until_node(step["node_after"], step.get("timeout_sec", 30), self.last_change_end)
             elif "node" in step:
                 self.until_node(step["node"], step.get("timeout_sec", 30))
             elif "wait_after" in step:
