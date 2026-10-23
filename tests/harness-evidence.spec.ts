@@ -391,6 +391,62 @@ describe('RFC #6 synthetic evidence seal safety (NOT native proof)', () => {
     expect(inspectArchive(e.archive).integrity).toBe(true)
   })
 
+  it('refuses a redaction-to-hash mutation, then retries with consistent source data', () => {
+    const e = evidence(workspace())
+    // Monkeypatch solely inside this synthetic Python test process, after the
+    // original redacted_wire read. Production has no test-only hook.
+    const script = [
+      'import importlib.util,sys',
+      'from pathlib import Path',
+      'spec=importlib.util.spec_from_file_location("proof",sys.argv[1])',
+      'm=importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(m)',
+      'original=m.redacted_wire',
+      'def changed(src,dst):',
+      ' counts=original(src,dst)',
+      ' with src.open("a",encoding="utf-8") as stream:',
+      '  stream.write(\'{"dir":"in","verb":"e","body":{"ev":"ack","sf":"dsh","s":1}}\\n\')',
+      ' return counts',
+      'm.redacted_wire=changed',
+      'try:',
+      ' m.seal(Path(sys.argv[2]),Path(sys.argv[3]),False)',
+      'except ValueError:',
+      ' sys.exit(2)',
+      'sys.exit(0)',
+    ].join('\n')
+    const result = python('-c', [script, sealScript, e.root, e.archive])
+    expect(result.status, result.stderr).toBe(2)
+    expect(existsSync(e.archive)).toBe(false)
+    expect(seal(e).status).toBe(0)
+    const saved = inspectArchive(e.archive)
+    expect(saved.integrity).toBe(true)
+    expect(saved.manifest['record_counts']).toEqual({ in: 2, out: 5 })
+  })
+
+  it('rejects a symlinked ancestor leading an archive back inside its evidence root', () => {
+    const parent = workspace()
+    const e = evidence(parent)
+    const alias = join(parent, 'alias')
+    symlinkSync(parent, alias, 'dir')
+    const bypass = join(alias, 'evidence', 'escaped.tar.gz')
+    const result = python(sealScript, ['--evidence-dir', e.root, '--out', bypass])
+    expect(result.status).toBe(2)
+    expect(existsSync(join(e.root, 'escaped.tar.gz'))).toBe(false)
+    expect(seal(e).status, 'safe destination must remain retryable').toBe(0)
+  })
+
+  it('keeps private launcher shell parseable without executing Sway or a provider', () => {
+    const source = readFileSync(join(harness, 'private_tern.sh'), 'utf8')
+    expect(source).toContain('DSH_TUI_TEST_WORKSPACE=$WORKSPACE')
+    expect(source).toContain('scenario_quote "$BASE/launch-dsh.sh"')
+    expect(source).toContain('replay_ready()')
+    const parse = spawnSync('bash', ['-n', join(harness, 'private_tern.sh')], {
+      encoding: 'utf8', timeout: 10_000,
+    })
+    expect(parse.error, String(parse.error)).toBeUndefined()
+    expect(parse.status, parse.stderr).toBe(0)
+  })
+
   it('labels replay only and remote-uncollected without claiming live local evidence', () => {
     const e = evidence(workspace())
     write(join(e.root, 'control/evidence-mode'), 'replay\n')
@@ -416,6 +472,12 @@ describe('RFC #6 synthetic evidence seal safety (NOT native proof)', () => {
     rmSync(join(remote.root, 'log/dsh-sdk-wire.jsonl'))
     rmSync(join(remote.root, 'log/metadata.jsonl'))
     rmSync(join(remote.root, 'sessions'), { recursive: true })
+    // A remote LIVE capture may not smuggle a replay source through the
+    // global allowlist, even without locally collected SDK/Session files.
+    write(join(remote.root, 'log/replay-source.jsonl'), wire(startup('dsh')))
+    expect(seal(remote).status).toBe(2)
+    expect(existsSync(remote.archive)).toBe(false)
+    rmSync(join(remote.root, 'log/replay-source.jsonl'))
     expect(seal(remote).status).toBe(0)
     expect(inspectArchive(remote.archive).manifest['source_kind']).toBe('remote-uncollected')
   })
