@@ -1,0 +1,37 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write apps/cli/tests/profiles/tui/harness/README.md
+/rfc-6-tern-conformance-and-private-evidence:
+  en: b295a0256a7026fb
+  zh: bbfe068fc6cfaeae
+/rfc-6-tern-conformance-and-private-evidence/clean-checkout-commands-to-be-run-by-omp-unrun-here:
+  en: 21cb5802adb49f4f
+  zh: ba15f921a8029df6
+/rfc-6-tern-conformance-and-private-evidence/private-real-tern-no-user-display-daemon-access:
+  en: 207d4981e916f38f
+  zh: d50b1f936d0083ae
+/rfc-6-tern-conformance-and-private-evidence/replay-is-not-a-live-program:
+  en: bf1e17295a1bf85e
+  zh: c132fddea43c60e8
+/rfc-6-tern-conformance-and-private-evidence/executable-hermes-omp-differential:
+  en: 9c5f31ac14de9441
+  zh: 0f6477d20a4601c6
+/rfc-6-tern-conformance-and-private-evidence/scope-remaining-gates-and-platform-constraints:
+  en: d03c17fe5a4bde51
+  zh: dab766c43c299195
+/rfc-6-tern-conformance-and-private-evidence/trn13-corrected-evidence-contract-connector-authored-unrun:
+  en: 5f92b46fce88325a
+  zh: 637a364e19eadbce
+/rfc-6-tern-conformance-and-private-evidence/trn6-public-service-acceptance-strict-connector-authored-unrun:
+  en: 095aabb636f3786f
+  zh: b5ecc211585478e8
+/rfc-6-tern-conformance-and-private-evidence/trn8-public-gates-fixture-repair-connector-only-tests-unrun:
+  en: bb214b5ffea740e0
+  zh: 6f4449e10c808b4d
+/rfc-6-tern-conformance-and-private-evidence/trn10-native-semantics-required-real-tern-pointer-witness-unrun:
+  en: aa19c206b2f9424c
+  zh: 6d2e1b9c8923375a
+/rfc-6-tern-conformance-and-private-evidence/trn15-source-lib-pty-fixture-corrections-connector-authored-unrun:
+  en: 24514f5a56c272a9
+  zh: b8a06f9382c7ba3a
