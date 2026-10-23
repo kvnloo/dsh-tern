@@ -32,8 +32,8 @@ try {
   const config = JSON.parse(readFileSync(join(packed, 'package.json'), 'utf8'))
   assert.equal(config.dependencies['@stencil-hq/tern'], '0.1.0')
   assert.doesNotMatch(lib, /(?:from\s*|import\s*\()\s*['"]@stencil-hq\/tern(?:['"/]|$)/)
-  assert.match(lib, /\bforget\s*\(/, 'patched SDK Surface.forget must be bundled')
-  assert.match(lib, /\bonAck\s*\(/, 'patched SDK Surface.onAck must be bundled')
+  assert.match(lib, /\bforget\s*\(\s*ids\s*\)\s*\{/, 'Surface.forget method body must be bundled')
+  assert.match(lib, /\bonAck\s*\(\s*listener\s*\)\s*\{/, 'Surface.onAck method body must be bundled')
 
   const supplied = process.env.REGISTRY_TERN_TARBALL
   if (!supplied) {
