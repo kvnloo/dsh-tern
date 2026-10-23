@@ -1,7 +1,7 @@
 diff --git a/dist/wire.js b/dist/wire.js
 --- a/dist/wire.js
 +++ b/dist/wire.js
-@@ -515,2 +515,3 @@
+@@ -370,2 +370,3 @@
          case 'hello':
 +            if (num(raw, 'v') !== PROTOCOL_VERSION) return { r: 'unknown', raw };
              return {
