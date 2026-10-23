@@ -318,7 +318,9 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 keyless shipped CLI throug
       const saved = await durable(dir)
       expect(users(saved)).toEqual([intended])
       expect(assistants(saved)).toEqual(['echo: ' + intended])
-      expect(saved.events.filter(event => event.type === 'user/message')).toHaveLength(1)
+      // Context/instruction user/message records remain durable; only source.kind=user
+      // is an actual submitted intent. Keep the exact-one isolation witness.
+      expect(users(saved)).toHaveLength(1)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
