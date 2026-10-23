@@ -89,6 +89,23 @@ describe('ANSI fallback does not require a Tern SDK', () => {
     expect(received).toEqual(['ABC'])
   })
 
+  it('restores a TTY caret over combined Unicode grapheme clusters', async () => {
+    const f = fixture(true)
+    const received: string[] = []
+    await f.terminal.start(value => received.push(value), () => {}, () => {})
+    f.stdin.write('A👨‍👩‍👧Z')
+    f.stdin.write('\x1b[D\x1b[D')
+    await new Promise(resolve => setImmediate(resolve))
+    const answer = f.terminal.ask({
+      title: 'Allow?', choices: [{ label: 'Deny', value: 'rejected' }],
+    })
+    f.stdin.write('1\r')
+    expect(await answer).toBe('rejected')
+    f.stdin.write('B\r')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(received).toEqual(['AB👨‍👩‍👧Z'])
+  })
+
   it('restores a piped partial draft after a cancelled question', async () => {
     const f = fixture()
     const received: string[] = []

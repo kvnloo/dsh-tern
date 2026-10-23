@@ -80,7 +80,8 @@ export class AnsiTerminal implements Terminal {
     input.prompt()
     if (!restore) return
     input.write(restore.line)
-    const trailing = Array.from(restore.line.slice(restore.cursor)).length
+    const trailing = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+      .segment(restore.line.slice(restore.cursor))].length
     for (let pos = 0; pos < trailing; pos++) input.write(null, { name: 'left' })
   }
 
