@@ -2,7 +2,11 @@
  * Public @stencil-hq/tern 0.1.0 handles TSP framing, hello/DA1, input decoding,
  * credits, chunking and terminal restoration. Plain typing stays on the PTY.
  */
-import { connect, node, type Key, type Node, type OpenOptions, type SessionInput } from '@stencil-hq/tern'
+import { createHash } from 'node:crypto'
+import {
+  connect, node, type Key, type Node, type OpenOptions, type SessionInput,
+  type TermInput, type TermOutput,
+} from '@stencil-hq/tern'
 import { abortableAnswer, type Ask, type Terminal } from './terminal.ts'
 import { Draft, type NativeEdit } from './draft.ts'
 import { safeText, type Entry, type Snapshot } from './model.ts'
@@ -26,11 +30,47 @@ export interface TernSDK {
 }
 
 /** Import the published SDK as an ordinary shipped dependency, not a cast peer. */
-export async function connectTern(): Promise<{ sdk: TernSDK; session: TernSession } | null> {
+export async function connectTern(
+  sessionId: string,
+): Promise<{ sdk: TernSDK; session: TernSession; recorder: TspRecorder } | null> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return null
-  const session = await connect({ app: 'dsh', features: ['edit', 'undo', 'send'], version: '0.2.1',
-    record: process.env.DSH_TSP_RECORD_FULL ?? '', exitHooks: false })
-  return session ? { sdk: { node }, session } : null
+  const recorder = new TspRecorder(process.env.DSH_TSP_RECORD, sessionId)
+  const readers = new Map<(chunk: Uint8Array | string) => void, (chunk: Uint8Array | string) => void>()
+  const input: TermInput = {
+    get isTTY() { return process.stdin.isTTY },
+    get isRaw() { return process.stdin.isRaw },
+    setRawMode(mode) { process.stdin.setRawMode(mode) },
+    resume() { process.stdin.resume() },
+    pause() { process.stdin.pause() },
+    on(event, listener) {
+      const observed = (chunk: Uint8Array | string): void => {
+        recorder.capture('in', chunk)
+        listener(chunk)
+      }
+      readers.set(listener, observed)
+      process.stdin.on(event, observed)
+    },
+    off(event, listener) {
+      const observed = readers.get(listener)
+      if (observed) process.stdin.off(event, observed)
+      readers.delete(listener)
+    },
+  }
+  const output: TermOutput = {
+    get isTTY() { return process.stdout.isTTY },
+    get columns() { return process.stdout.columns },
+    write(data) {
+      recorder.capture('out', data)
+      return process.stdout.write(data)
+    },
+  }
+  const session = await connect({
+    app: 'dsh', features: ['edit', 'undo', 'send'], version: '0.2.1',
+    input, output, record: process.env.DSH_TSP_RECORD_FULL ?? '', exitHooks: false,
+  })
+  if (!session) return null
+  recorder.setCapabilities(() => session.caps)
+  return { sdk: { node }, session, recorder }
 }
 
 const EDITOR = 'dock.composer.line.input'
@@ -48,14 +88,16 @@ export class NativeTerminal implements Terminal {
   private prompt: { request: Ask; answer: (text: string | null) => void } | undefined
   private running: Promise<void> | undefined
   private stopped = false
-  private readonly gone = new Set<string>()
-  private readonly settled = new Set<string>()
+  private readonly gone = new Map<string, string>()
+  private readonly settled = new Map<string, string>()
   private visible = true
   private pendingRecovery = false
   private revision = 0
-  private recorder: TspRecorder | undefined
-
-  constructor(private readonly sdk: TernSDK, private readonly session: TernSession) {
+  constructor(
+    private readonly sdk: TernSDK,
+    private readonly session: TernSession,
+    private recorder?: TspRecorder,
+  ) {
     this.surface = this.openSurface()
   }
 
@@ -90,11 +132,6 @@ export class NativeTerminal implements Terminal {
       try {
         for await (const input of this.session) {
           if (this.stopped) break
-          this.recorder?.write({
-            direction: 'in', verb: input.type === 'key' ? 'key' : input.event.ev,
-            parsedBytes: JSON.stringify(input).length, surfaceId: this.surfaceId(),
-            revision: this.revision,
-          })
           if (input.type === 'key') this.key(input.key)
           else if (input.event.ev === 'gone') {
             if (input.event.ids.includes(this.surfaceId())) {
@@ -102,8 +139,9 @@ export class NativeTerminal implements Terminal {
               else this.pendingRecovery = true
             } else {
               for (const id of input.event.ids) {
-                if (this.settled.has(id)) {
-                  this.gone.add(id)
+                const version = this.settled.get(id)
+                if (version) {
+                  this.gone.set(id, version)
                   this.settled.delete(id)
                 }
               }
@@ -175,22 +213,41 @@ export class NativeTerminal implements Terminal {
     return this.sdk.node(kind, props, children)
   }
 
-  private supported(kind: string, fallback: string): string {
-    const kinds = this.session.caps?.kinds
-    return kinds && !kinds.includes(kind) ? fallback : kind
+  /** A fallback must itself be negotiated; rows is a non-editable PTY display. */
+  private supported(...kinds: string[]): string | undefined {
+    const negotiated = this.session.caps?.kinds
+    return kinds.find(kind => !negotiated || negotiated.includes(kind))
+  }
+
+  private textNode(key: string, text: string, markdown = false): Node {
+    const kind = this.supported(...(markdown ? ['md', 'text', 'rows'] : ['text', 'rows']))
+    if (!kind) throw new Error('Tern lacks both text and rows presentation kinds')
+    return kind === 'rows'
+      ? this.n('rows', { key, lines: text.split('\n') })
+      : this.n(kind, { key, text, ...(kind === 'text' ? { wrap: 'word' } : {}) })
+  }
+
+  private wrap(key: string, role: string, children: Node[], props: Record<string, unknown> = {}): Node {
+    const kind = this.supported('card', 'col', 'row')
+    if (!kind) {
+      // The terminal has only leaves; one rows/text leaf can still represent the entry.
+      const leaf = children[0]
+      if (!leaf) throw new Error('cannot render an empty Tern node')
+      return leaf
+    }
+    return this.n(kind, { key, role, ...props }, children)
+  }
+
+  private version(entry: Entry): string {
+    return createHash('sha256').update(entry.kind).update('\0').update(entry.text).digest('hex')
   }
 
   private renderEntry(entry: Entry): Node {
-    const body = this.n('text', { key: 'body', text: entry.text, wrap: 'word' })
-    if (entry.kind === 'tool' || entry.kind === 'error') {
-      return this.n(this.supported('card', 'col'), {
-        key: entry.id, role: 'dsh.tool', tone: entry.kind === 'error' ? 'error' : 'muted',
-      }, [body])
-    }
-    const markdown = this.supported('md', 'text')
-    return this.n(this.supported('card', 'col'), {
-      key: entry.id, role: entry.kind === 'user' ? 'omp.user' : 'omp.assistant',
-    }, [this.n(markdown, { key: 'body' }, [entry.text || ' '])])
+    const role = entry.kind === 'tool' || entry.kind === 'error'
+      ? 'dsh.tool' : entry.kind === 'user' ? 'dsh.user' : 'dsh.assistant'
+    return this.wrap(entry.id, role, [
+      this.textNode('body', entry.text, entry.kind === 'assistant' || entry.kind === 'user'),
+    ], entry.kind === 'error' ? { tone: 'error' } : {})
   }
 
   private sendDraft(): void {
@@ -210,85 +267,113 @@ export class NativeTerminal implements Terminal {
   private render(): void {
     const snapshot = this.last
     if (!snapshot || this.stopped || !this.visible || this.surface.closed) return
-    const main = snapshot.entries.filter(e => !this.gone.has('main.' + e.id))
-      .map(e => this.renderEntry(e))
+    const main: Node[] = []
+    for (const entry of snapshot.entries) {
+      const id = 'main.' + entry.id
+      const version = this.version(entry)
+      if (this.gone.get(id) === version) continue
+      this.gone.delete(id)
+      main.push(this.renderEntry(entry))
+    }
     if (snapshot.live && !snapshot.entries.some(e => e.id === snapshot.liveId)) {
-      main.push(this.n('col', { key: snapshot.liveId ?? 'live', role: 'omp.assistant' }, [
-        this.n(this.supported('md', 'text'), { key: 'stream', stream: true }, [safeText(snapshot.live)]),
+      main.push(this.wrap(snapshot.liveId ?? 'live', 'dsh.assistant', [
+        this.textNode('stream', safeText(snapshot.live), true),
       ]))
     }
-    const editor = this.n(this.supported('editor', 'input'), {
-      key: 'input', text: this.draft.text, cursor: this.draft.cursor,
-      placeholder: 'Ask dsh · /help · /session', maxLines: 18,
-      sendable: !this.prompt,
-      onEdit: (edit: NativeEdit) => {
-        if (!this.prompt && this.draft.edit(edit)) this.render()
-      },
-      onUndo: () => { if (!this.prompt && this.draft.undo()) this.render() },
-      onSend: (event: { text: string }) => { if (!this.prompt) this.send(event.text) },
-    })
-    const dock = [
-      this.n('row', { key: 'status', role: 'dsh.status' }, [
-        this.n('text', {
-          key: 'label',
-          spans: [{ s: 'strong', t: 'dsh' }, { s: 'muted', t: ' · ' + snapshot.sessionId + ' · ' + snapshot.status }],
-        }),
-      ]),
-      ...(snapshot.notice ? [this.n('text', { key: 'notice', role: 'dsh.notice', text: snapshot.notice })] : []),
-      this.n('col', { key: 'composer', role: 'omp.editor' }, [
-        this.n('row', { key: 'line', role: 'omp.composer.line' }, [editor]),
-      ]),
+    const editorKind = this.supported('editor', 'input')
+    const status = this.textNode('label', 'dsh · ' + snapshot.sessionId + ' · ' + snapshot.status)
+    const rowKind = this.supported('row', 'col')
+    const colKind = this.supported('col', 'row', 'card')
+    const dock: Node[] = [
+      rowKind ? this.n(rowKind, { key: 'status', role: 'dsh.status' }, [status]) : status,
+      ...(snapshot.notice ? [this.textNode('notice', snapshot.notice)] : []),
     ]
+    if (editorKind) {
+      const editor = this.n(editorKind, {
+        key: 'input', text: this.draft.text, cursor: this.draft.cursor,
+        placeholder: 'Ask dsh · /help · /session', maxLines: 18,
+        sendable: !this.prompt,
+        onEdit: (edit: NativeEdit) => {
+          if (!this.prompt && this.draft.edit(edit)) this.render()
+        },
+        onUndo: () => { if (!this.prompt && this.draft.undo()) this.render() },
+        onSend: (event: { text: string }) => { if (!this.prompt) this.send(event.text) },
+      })
+      const line = rowKind
+        ? this.n(rowKind, { key: 'line', role: 'dsh.composer.line' }, [editor]) : editor
+      dock.push(colKind ? this.n(colKind, { key: 'composer', role: 'dsh.editor' }, [line]) : line)
+    } else {
+      // No native editor/input: the SDK's PTY keys still edit this canonical draft.
+      // A text/rows view gives the user its state; Enter submits through key().
+      const draft = this.textNode('draft', this.draft.text || 'Ask dsh · Enter sends')
+      dock.push(colKind ? this.n(colKind, { key: 'composer', role: 'dsh.editor' }, [draft]) : draft)
+    }
     const layer: Node[] = []
-    if (this.prompt) {
-      const prompt = this.prompt
+    const prompt = this.prompt
+    const answerKind = this.supported('editor', 'input')
+    const buttonKind = this.supported('button')
+    if (prompt) {
       const options = prompt.request.choices ?? []
-      layer.push(this.n(this.supported('card', 'col'), {
-        key: 'question', role: 'dsh.question', tone: 'muted',
-      }, [
-        this.n('text', { key: 'title', text: prompt.request.title, wrap: 'word' }),
-        ...(prompt.request.detail ? [this.n(this.supported('md', 'text'), {
-          key: 'detail', text: prompt.request.detail,
-        })] : []),
-        ...options.map((choice, i) => this.n(this.supported('button', 'text'), {
-          key: 'choice.' + i, text: (i + 1) + ') ' + choice.label,
+      const children: Node[] = [this.textNode('title', prompt.request.title)]
+      if (prompt.request.detail) children.push(this.textNode('detail', prompt.request.detail, true))
+      for (const [i, choice] of options.entries()) {
+        const label = (i + 1) + ') ' + choice.label
+        if (!buttonKind) { children.push(this.textNode('choice.' + i, label)); continue }
+        children.push(this.n(buttonKind, {
+          key: 'choice.' + i, text: label,
           onClick: () => {
+            // SDK dispatch may queue a callback from a view replaced pre-paint.
+            if (this.prompt !== prompt) return
             if (prompt.request.multiple) {
               const old = this.answerDraft.text
               this.answerDraft.set(old ? old + ', ' + choice.value : choice.value)
               this.render()
             } else prompt.answer(choice.value)
           },
-        })),
-        this.n(this.supported('editor', 'input'), {
+        }))
+      }
+      if (answerKind) {
+        children.push(this.n(answerKind, {
           key: 'answer', text: this.answerDraft.text, cursor: this.answerDraft.cursor,
           placeholder: options.length ? (prompt.request.multiple ? 'Numbers separated by commas' : 'Option or custom answer') : 'Answer',
           sendable: true,
-          onEdit: (edit: NativeEdit) => { if (this.answerDraft.edit(edit)) this.render() },
-          onUndo: () => { if (this.answerDraft.undo()) this.render() },
-          onSend: (ev: { text: string }) => { if (ev.text.trim()) prompt.answer(ev.text) },
-        }),
-      ]))
+          onEdit: (edit: NativeEdit) => {
+            if (this.prompt === prompt && this.answerDraft.edit(edit)) this.render()
+          },
+          onUndo: () => {
+            if (this.prompt === prompt && this.answerDraft.undo()) this.render()
+          },
+          onSend: (ev: { text: string }) => {
+            if (this.prompt === prompt && ev.text.trim()) prompt.answer(ev.text)
+          },
+        }))
+      } else {
+        children.push(this.textNode('answer', this.answerDraft.text || 'Type answer; Enter confirms'))
+      }
+      const group = this.supported('card', 'col', 'row')
+      if (group) layer.push(this.n(group, { key: 'question', role: 'dsh.question' }, children))
+      else layer.push(...children)
     }
+    this.recorder?.setContext({ revision: this.revision + 1, eventSeq: snapshot.latestSeq })
     this.surface.render({ main, dock, layer })
     this.revision += 1
-    this.recorder?.write({
-      direction: 'out', verb: 'render', parsedBytes: JSON.stringify({
-        main: main.map(node => node.toJSON()), dock: dock.map(node => node.toJSON()),
-        layer: layer.map(node => node.toJSON()),
-      }).length,
-      surfaceId: this.surfaceId(), revision: this.revision,
-      eventSeq: snapshot.latestSeq,
-      ...(this.session.caps ? { caps: this.session.caps } : {}),
-    })
-    this.surface.focus(this.prompt ? ANSWER : EDITOR)
+    // Focus only an actual editor/input node. Never issue focus to rows/text.
+    if (prompt && answerKind) {
+      const prefix = this.supported('card', 'col', 'row') ? 'layer.question.' : 'layer.'
+      this.surface.focus(prefix + 'answer')
+    } else if (!prompt && editorKind) {
+      const path = ['dock', colKind ? 'composer' : '', rowKind ? 'line' : '', 'input']
+        .filter(Boolean).join('.')
+      this.surface.focus(path)
+    }
     if (this.session.caps?.features.includes('settle') && this.surface.settle) {
       for (const entry of snapshot.entries) {
         if (entry.kind === 'tool' && entry.text.startsWith('Running ')) continue
         const id = 'main.' + entry.id
-        if (this.gone.has(id) || this.settled.has(id)) continue
+        const version = this.version(entry)
+        if (this.gone.get(id) === version || this.settled.get(id) === version) continue
         this.surface.settle(id)
-        this.settled.add(id)
+        this.settled.set(id, version)
       }
     }
   }
