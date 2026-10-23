@@ -150,4 +150,96 @@ describe('SDK parser -> owned ANSI input, with no process stdin monkeypatch', ()
       stdin.destroy()
     }
   })
+  it('releases active ANSI TTY flow after readline shutdown without losing later bytes', async () => {
+    const { stdin, fence, listeners } = fixture()
+    const stdout = Object.assign(new PassThrough(), { isTTY: true, columns: 80 })
+    const submitted: string[] = []
+    let terminal: AnsiTerminal | undefined
+    try {
+      terminal = new AnsiTerminal({ stdin: fence.activate(), stdout })
+      await terminal.start(text => submitted.push(text), () => {}, () => {})
+      stdin.write('done\r')
+      await tick()
+      expect(submitted).toEqual(['done'])
+      expect(stdin.readableFlowing).toBe(true)
+
+      await terminal.closed()
+      fence.close()
+      fence.close() // Closing twice must not resume or destroy the real source.
+      expect(stdin.isRaw).toBe(false)
+      expect(stdin.listenerCount('data')).toBe(listeners)
+      expect(stdin.readableFlowing).toBe(false)
+      expect(stdin.isPaused()).toBe(true)
+      expect(stdin.destroyed).toBe(false)
+
+      stdin.write('retained')
+      await tick()
+      expect(stdin.readableLength).toBe(utf8('retained').length)
+      const later: Buffer[] = []
+      stdin.on('data', (chunk: Buffer) => later.push(Buffer.from(chunk)))
+      stdin.resume() // A future owner can explicitly acquire the still-live source.
+      await tick()
+      expect(Buffer.concat(later)).toEqual(utf8('retained'))
+    } finally {
+      await terminal?.closed()
+      fence.close()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('keeps the SDK native source flowing when the passive probe closes', async () => {
+    const { stdin, fence, listeners } = fixture()
+    const native: Buffer[] = []
+    const sdkInput = (chunk: Buffer): void => { native.push(Buffer.from(chunk)) }
+    stdin.on('data', sdkInput)
+    try {
+      stdin.write('during-probe')
+      await tick()
+      expect(stdin.readableFlowing).toBe(true)
+      fence.close()
+      fence.close()
+      expect(stdin.listenerCount('data')).toBe(listeners + 1)
+      expect(stdin.readableFlowing).toBe(true)
+      expect(stdin.isPaused()).toBe(false)
+
+      // The SDK, not a replay stream or a second parser, receives these bytes.
+      const after = utf8('\x1b_tsp;e;{"ev":"send","text":"native"}\x1b\\🌱')
+      stdin.write(after.subarray(0, 5))
+      stdin.write(after.subarray(5))
+      await tick()
+      expect(Buffer.concat(native)).toEqual(Buffer.concat([utf8('during-probe'), after]))
+      expect(stdin.destroyed).toBe(false)
+    } finally {
+      stdin.off('data', sdkInput)
+      fence.close()
+      stdin.destroy()
+    }
+  })
+
+  it('preserves another active reader after releasing ANSI backpressure', async () => {
+    const { stdin, fence, listeners } = fixture()
+    const filtered = fence.activate()
+    const external: Buffer[] = []
+    const reader = (chunk: Buffer): void => { external.push(Buffer.from(chunk)) }
+    stdin.on('data', reader)
+    try {
+      // No derived consumer: a large chunk fills the fence and pauses its source.
+      stdin.write(Buffer.alloc(filtered.writableHighWaterMark * 2, 0x78))
+      await tick()
+      expect(stdin.isPaused()).toBe(true)
+      fence.close()
+      expect(stdin.listenerCount('data')).toBe(listeners + 1)
+      expect(stdin.readableFlowing).toBe(true)
+      expect(stdin.isPaused()).toBe(false)
+      stdin.write('still-active')
+      await tick()
+      expect(Buffer.concat(external).subarray(-utf8('still-active').length)).toEqual(utf8('still-active'))
+    } finally {
+      stdin.off('data', reader)
+      fence.close()
+      stdin.destroy()
+    }
+  })
+
 })

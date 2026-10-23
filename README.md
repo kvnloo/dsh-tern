@@ -29,6 +29,13 @@ readline writes; pipes retain partial UTF-8 lines under explicit draft
 ownership so approval input never inherits an unsent user prompt. It does not require a custom cell renderer
 or terminal plugin and works in ordinary terminals and SSH sessions.
 
+On ANSI fallback, `src/input-fence.ts` replays buffered probe keys once and
+filters late TSP replies. After readline closes and restores TTY raw mode, the
+fence ends only its derived input and pauses the real source if no other reader
+remains; it never destroys `process.stdin`. Closing the passive probe after
+native negotiation does **not** pause the SDK's original input. Active external
+readers retain their stream, even if ANSI backpressure had paused it.
+
 The shipped package pins @stencil-hq/tern 0.1.0 with a frozen-lockfile
 entry and a narrow pnpm patch rejecting unsupported hello versions;
 no manual SDK install is needed. Its public connect negotiates TSP,

@@ -121,7 +121,10 @@ export class AnsiInputFence {
     return this.stream
   }
 
-  /** Only owned listeners and the derived stream; never destroy process.stdin. */
+  /**
+   * Release active ANSI flow ownership after readline has restored raw mode.
+   * A passive probe must never pause the SDK's original native input.
+   */
   close(): void {
     if (this.disposed) return
     this.disposed = true
@@ -131,5 +134,14 @@ export class AnsiInputFence {
     this.stream.off('drain', this.onDrain)
     this.queued = []
     this.stream.end()
+
+    if (!this.active) return
+    // Removing our data listener alone leaves a flowing TTY read handle alive.
+    // Only stop it when no other data/readable consumer is still attached.
+    const hasOtherReaders = this.source.listenerCount('data') > 0
+      || this.source.listenerCount('readable') > 0
+    if (!hasOtherReaders) this.source.pause()
+    // Our backpressure may have paused another reader; relinquish that pause.
+    else if (this.backpressured && !this.ended) this.source.resume()
   }
 }
