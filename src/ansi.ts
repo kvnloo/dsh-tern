@@ -26,7 +26,8 @@ export class AnsiTerminal implements Terminal {
   private onLine: ((text: string) => void) | undefined
   private onInterrupt: (() => void) | undefined
   private onQuit: (() => void) | undefined
-  private shown = new Set<string>()
+  private shown = new Map<string, string>()
+  private saved: { line: string; cursor: number } | undefined
   private pending: ((text: string | null) => void) | undefined
   private lastStatus: Snapshot['status'] = 'idle'
   private lastNotice = ''
@@ -66,9 +67,11 @@ export class AnsiTerminal implements Terminal {
 
   update(snapshot: Snapshot): void {
     for (const entry of snapshot.entries) {
-      if (this.shown.has(entry.id)) continue
-      this.shown.add(entry.id)
-      this.io.stdout.write(lineOf(entry))
+      const previous = this.shown.get(entry.id)
+      const line = lineOf(entry)
+      if (previous === line) continue
+      this.shown.set(entry.id, line)
+      this.io.stdout.write(line)
     }
     if (this.lastStatus !== snapshot.status) {
       this.lastStatus = snapshot.status
@@ -82,19 +85,41 @@ export class AnsiTerminal implements Terminal {
   }
 
   ask(request: Ask): Promise<string | null> {
-    if (!this.input || this.pending) return Promise.resolve(null)
+    const input = this.input
+    if (!input || this.pending) return Promise.resolve(null)
+    if (request.signal?.aborted) return Promise.resolve(null)
+    // Readline keeps the unsent draft in `line` and `cursor`. Taking
+    // ownership of an approval must move BOTH aside before another key arrives.
+    this.saved = { line: input.line, cursor: input.cursor }
+    input.line = ''
+    input.cursor = 0
     this.io.stdout.write('\n' + safeText(request.title) + '\n')
     if (request.detail) this.io.stdout.write(safeText(request.detail) + '\n')
-    request.choices?.forEach((item, i) => this.io.stdout.write('  ' + (i + 1) + ') ' + safeText(item.label) + '\n'))
-    this.input.setPrompt('answer> ')
-    this.input.prompt()
+    request.choices?.forEach((item, i) =>
+      this.io.stdout.write('  ' + (i + 1) + ') ' + safeText(item.label) + '\n'))
+    if (request.multiple) this.io.stdout.write('Select numbers separated by commas.\n')
+    input.setPrompt('answer> ')
+    input.prompt()
     return abortableAnswer(request.signal, done => {
       this.pending = text => {
         if (text === null) return done(null)
-        const choice = request.choices?.find((v, i) => v.value === text || String(i + 1) === text || v.label === text)
+        if (request.multiple) return done(text)
+        const choice = request.choices?.find((v, i) =>
+          v.value === text || String(i + 1) === text || v.label === text)
         done(request.choices && !choice ? null : choice?.value ?? text)
       }
-      return () => { this.pending = undefined; this.input?.setPrompt('dsh> '); this.input?.prompt() }
+      return () => {
+        this.pending = undefined
+        const saved = this.saved
+        this.saved = undefined
+        if (!this.input) return
+        this.input.setPrompt('dsh> ')
+        if (saved) {
+          this.input.line = saved.line
+          this.input.cursor = saved.cursor
+        }
+        this.input.prompt(true)
+      }
     })
   }
 
