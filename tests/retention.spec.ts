@@ -120,12 +120,16 @@ class Output implements TermOutput {
   readonly isTTY = true
   readonly columns = 80
   readonly chunks = new Map<string, Uint8Array[]>()
+  readonly packetBytes: number[] = []
+  readonly reassembledBytes: number[] = []
   constructor(readonly input: Input, readonly oracle: Oracle) {}
   write(data: string | Uint8Array): void {
     const wire = typeof data === 'string' ? data : string(data)
     for (const match of wire.matchAll(/\x1b_tsp;([\s\S]*?)\x1b\\/g)) {
       const part = splitMessage(bytes(match[1]!))
       if (!part) throw new Error('invalid SDK wire message')
+      this.packetBytes.push(part.body.byteLength)
+      if (part.body.byteLength > hello.apc) throw new Error('negotiated APC limit exceeded')
       const params = new Map(part.params)
       const token = params.get('c')
       if (token) {
@@ -139,6 +143,10 @@ class Output implements TermOutput {
   }
   private handle(verb: string, body: Uint8Array): void {
     if (verb !== 'f' && verb !== 'o') return
+    if (body.byteLength > 24 * 1024 * 1024) {
+      throw new Error('TSP reassembled-message ceiling exceeded')
+    }
+    if (verb === 'f') this.reassembledBytes.push(body.byteLength)
     const json = JSON.parse(string(body)) as Record<string, unknown>
     if (verb === 'o') { this.oracle.opens.push(json['id'] as string); return }
     const frame = json as Frame
@@ -158,7 +166,7 @@ async function connected() {
   if (!session) throw new Error('expected actual SDK session')
   const terminal = new NativeTerminal({ node }, session)
   await terminal.start(() => {}, () => {}, error => { if (error) throw error })
-  return { input, oracle, terminal }
+  return { input, oracle, terminal, output }
 }
 
 describe('RFC #6 real-SDK settled history retention', () => {
@@ -204,7 +212,7 @@ describe('RFC #6 real-SDK settled history retention', () => {
   })
 
   it('replays more than 24 MiB of intact durable history in ACK-bounded frames, in order', async () => {
-    const { oracle, terminal } = await connected()
+    const { oracle, terminal, output } = await connected()
     const entries: Entry[] = Array.from({ length: 1080 }, (_, i) => ({
       id: 'event.' + i.toString().padStart(4, '0'), kind: i % 2 ? 'assistant' : 'user',
       text: '[' + i + ']' + '🚀 payload '.repeat(2000),
@@ -217,6 +225,8 @@ describe('RFC #6 real-SDK settled history retention', () => {
       }, { timeout: 120_000, interval: 20 })
       expect(oracle.opens).toEqual(['dsh'])
       expect(oracle.frames.length).toBeGreaterThan(10)
+      expect(output.packetBytes.every(size => size <= hello.apc)).toBe(true)
+      expect(output.reassembledBytes.every(size => size <= 24 * 1024 * 1024)).toBe(true)
       expect(oracle.children.get('main')).toEqual(entries.map(e => 'main.' + e.id))
       for (const entry of entries) expect(oracle.text('main.' + entry.id + '.body')).toBe(entry.text)
     } finally { await terminal.closed() }
