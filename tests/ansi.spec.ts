@@ -94,7 +94,7 @@ describe('ANSI fallback does not require a Tern SDK', () => {
     const received: string[] = []
     await f.terminal.start(value => received.push(value), () => {}, () => {})
     f.stdin.write('A👨‍👩‍👧Z')
-    f.stdin.write('\x1b[D\x1b[D')
+    f.stdin.write('\x01\x1b[C')
     await new Promise(resolve => setImmediate(resolve))
     const answer = f.terminal.ask({
       title: 'Allow?', choices: [{ label: 'Deny', value: 'rejected' }],
