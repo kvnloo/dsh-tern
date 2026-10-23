@@ -171,7 +171,8 @@ describe('RFC #6 real-SDK settled history retention', () => {
       await vi.waitFor(() => expect(oracle.settled.has('main.one') && oracle.settled.has('main.two')).toBe(true))
       oracle.evict('main.one')
       input.send(reply({ ev: 'gone', sf: 'dsh', ids: ['main.one'] }))
-      await vi.waitFor(() => expect(oracle.evicted.has('main.one')).toBe(true))
+      await new Promise(resolve => setImmediate(resolve))
+      expect(oracle.evicted.has('main.one')).toBe(true)
       terminal.update(snapshot([first, { ...second, text: 'updated second' }]))
       await vi.waitFor(() => expect(oracle.text('main.two.body')).toBe('updated second'))
       expect(oracle.opens).toEqual(['dsh'])
@@ -184,7 +185,7 @@ describe('RFC #6 real-SDK settled history retention', () => {
     const { oracle, terminal } = await connected()
     const entries: Entry[] = Array.from({ length: 1080 }, (_, i) => ({
       id: 'event.' + i.toString().padStart(4, '0'), kind: i % 2 ? 'assistant' : 'user',
-      text: '[' + i + ']' + '🚀 payload '.repeat(1100),
+      text: '[' + i + ']' + '🚀 payload '.repeat(2000),
     }))
     expect(Buffer.byteLength(entries.map(e => e.text).join(''), 'utf8')).toBeGreaterThan(24 * 1024 * 1024)
     try {
