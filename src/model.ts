@@ -161,12 +161,13 @@ export class Transcript {
         const toolId = 'tool.' + event.data.message.toolCallId
         const name = this.runningTools.get(toolId)?.name
           ?? this.rows.find(row => row.id === toolId)?.tool?.name
+        const status: ToolStatus = event.data.message.isError ? 'error' : 'done'
         entry = {
           id: toolId,
           kind: event.data.message.isError ? 'error' : 'tool',
           text: 'Tool result: ' + textContent(event.data.message.content),
           ...(name === undefined ? {} : {
-            tool: { name, status: event.data.message.isError ? 'error' : 'done' },
+            tool: { name, status },
           }),
         }
         this.runningTools.delete(toolId)
