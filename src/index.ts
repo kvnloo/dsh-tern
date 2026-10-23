@@ -181,7 +181,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
     return answer === 'allowed-once' ? 'allowed-once' : request.signal?.aborted ? 'cancelled' : 'rejected'
   }, { global: true })
   const offQuestions = ctx.on('user-questions/request', async (request, next) => {
-    if (request.agent && request.agent !== agent) return next()
+    if (request.agent !== agent) return next()
     const answers = []
     for (const question of request.questions) {
       const choices = question.multiSelect ? undefined : question.options?.map(option => ({
