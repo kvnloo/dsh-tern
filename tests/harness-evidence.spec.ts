@@ -48,16 +48,22 @@ function python(script: string, args: string[]): { status: number | null; stderr
   expect(result.error, String(result.error)).toBeUndefined()
   return { status: result.status, stderr: result.stderr, stdout: result.stdout }
 }
-type Event = { dir: 'in' | 'out'; verb: string; body: Record<string, any> }
+type Event = { dir: 'in' | 'out'; verb: string; body: Record<string, any> | string; params?: Record<string, string> }
+const body = (event: Event): Record<string, any> => event.body as Record<string, any>
 const hello = {
   r: 'hello', v: 1, term: 'tern', ver: '0.9.5',
-  kinds: ['col', 'text', 'editor'], features: ['edit', 'send', 'undo'],
+  kinds: ['col', 'text', 'editor', 'input'],
+  features: ['blobs', 'settle', 'adopt', 'dock', 'program-palette',
+    'reduce-motion', 'aside', 'scroll', 'styles', 'flow'],
   credits: 1, apc: 8192, cols: 100,
 }
 function startup(app: string): Event[] {
   return [
-    { dir: 'out', verb: 'q', body: { q: 'hello', v: 1, app } },
+    { dir: 'out', verb: 'q', body: {
+      q: 'hello', v: [1], app, ver: '', features: ['edit', 'undo', 'send'],
+    } },
     { dir: 'in', verb: 'r', body: { ...hello } },
+    { dir: 'out', verb: 'b', params: { id: app + '.logo', mime: 'image/png' }, body: 'aGVsbG8=' },
     { dir: 'out', verb: 'o', body: { sf: app, mode: 'inline' } },
     { dir: 'out', verb: 'f', body: {
       sf: app, s: 1, ops: [
@@ -68,10 +74,11 @@ function startup(app: string): Event[] {
             { id: app + '.editor', k: 'editor', p: { text: '' } },
           ],
         }],
-        ['text', app + '.message', 'Ready'], // actual TSP 3-field text op
+        ['text', app + '.message', 'replace', 'Ready'], // SDK Op is FOUR fields
       ],
     } },
     { dir: 'in', verb: 'e', body: { ev: 'ack', sf: app, s: 1 } },
+    { dir: 'out', verb: 'x', body: { id: app, keep: true } },
   ]
 }
 const wire = (events: Event[]): string => events.map(item => JSON.stringify(item)).join('\n') + '\n'
@@ -179,7 +186,7 @@ function inspectArchive(path: string): { names: string[]; manifest: Record<strin
 }
 
 describe('RFC #6 synthetic startup protocol validator (NOT parity proof)', () => {
-  it('accepts q/r + actual recursive node IDs + 3-field text + bounded ACK only', () => {
+  it('accepts q.v:[1], program q.features, terminal kinds/features, SDK blob, text and CLOSE', () => {
     const root = workspace()
     const dsh = captured(root, 'dsh')
     const peer = captured(root, 'hermes')
@@ -188,14 +195,110 @@ describe('RFC #6 synthetic startup protocol validator (NOT parity proof)', () =>
     expect(result.stdout).toContain('"startup-protocol-only-not-edit-send-or-model-parity"')
   })
 
-  it('rejects mismatched negotiation, missing metadata, model and workspace', () => {
+  it('accepts a cumulative in-flight ACK draining AFTER x CLOSE', () => {
     const root = workspace()
     const dsh = captured(root, 'dsh')
     const peer = captured(root, 'hermes')
-    peer.events[1]!.body['credits'] = 2
+    const ack = peer.events.splice(5, 1)[0]!
+    peer.events.push(ack)
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(0)
+  })
+
+  it('rejects unsupported q versions/features and malformed r replies', () => {
+    const root = workspace()
+    const dsh = captured(root, 'dsh')
+    const peer = captured(root, 'hermes')
+    body(peer.events[0]!)['v'] = 1 // scalar version is NOT the SDK query
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2)
+    body(peer.events[0]!)['v'] = [1]
+    body(peer.events[0]!)['features'] = ['edit', 'undo']
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2)
+    body(peer.events[0]!)['features'] = ['edit', 'undo', 'send']
+    body(peer.events[1]!)['v'] = 2 // not in the offered list
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2)
+    body(peer.events[1]!)['v'] = 1
+    body(peer.events[1]!)['kinds'] = ['col', 'editor']
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2)
+  })
+
+  it('refuses manifests that both lie about the live terminal version', () => {
+    const root = workspace()
+    const dsh = captured(root, 'dsh')
+    const peer = captured(root, 'hermes')
+    dsh.meta['tern_version'] = 'Tern 0.9.6'
+    peer.meta['tern_version'] = 'Tern 0.9.6'
+    dsh.persist()
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2)
+  })
+
+  it('rejects malformed blob records, three-field text, and incorrect CLOSE', () => {
+    const root = workspace()
+    const dsh = captured(root, 'dsh')
+    const peer = captured(root, 'hermes')
+    peer.events[2]!.body = 'not/base64?'
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2)
+    peer.events[2]!.body = 'aGVsbG8='
+    peer.events[2]!.params = { id: 'hermes.logo', mime: '' }
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2)
+    peer.events[2]!.params = { id: 'hermes.logo', mime: 'image/png' }
+    body(peer.events[4]!)['ops'][1] = ['text', 'hermes.message', 'Ready']
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2)
+    body(peer.events[4]!)['ops'][1] = ['text', 'hermes.message', 'replace', 'Ready']
+    body(peer.events[6]!)['keep'] = 'true'
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2)
+    body(peer.events[6]!)['keep'] = true
+    peer.events.pop()
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2) // no close
+  })
+
+  it('rejects frames after CLOSE, over-credit frames, bad ACK and real errors', () => {
+    const root = workspace()
+    const dsh = captured(root, 'dsh')
+    const peer = captured(root, 'hermes')
+    peer.events.push({ dir: 'out', verb: 'f', body: {
+      sf: 'hermes', s: 2, ops: [['text', 'hermes.message', 'append', '!']],
+    } })
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2) // frame after x
+    peer.events.pop()
+    peer.events.splice(5, 0, { dir: 'out', verb: 'f', body: {
+      sf: 'hermes', s: 2, ops: [['text', 'hermes.message', 'append', '!']],
+    } })
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2) // second frame without credit
+    peer.events.splice(5, 1)
+    body(peer.events[5]!)['s'] = 2
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2) // ACK for unissued frame
+    body(peer.events[5]!)['s'] = 1
+    peer.events.push({ dir: 'in', verb: 'e', body: { ev: 'error', msg: 'real close/credit defect' } })
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2)
+    peer.events.pop()
+    delete body(peer.events[4]!)['ops'][0][4]['id']
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2)
+  })
+
+  it('rejects differing negotiation, missing metadata, mismatched model/workspace', () => {
+    const root = workspace()
+    const dsh = captured(root, 'dsh')
+    const peer = captured(root, 'hermes')
+    body(peer.events[1]!)['credits'] = 2
     peer.persist()
     expect(diff(dsh, peer).status).toBe(1)
-    peer.events[1]!.body['credits'] = 1
+    body(peer.events[1]!)['credits'] = 1
     delete peer.meta['model_id']
     peer.persist()
     expect(diff(dsh, peer).status).toBe(2)
@@ -204,29 +307,6 @@ describe('RFC #6 synthetic startup protocol validator (NOT parity proof)', () =>
     expect(diff(dsh, peer).status).toBe(2)
     peer.meta['model_id'] = 'tui-fixture/deterministic'
     peer.meta['workspace_start'] = { empty: false, prior_events: 1 }
-    peer.persist()
-    expect(diff(dsh, peer).status).toBe(2)
-  })
-
-  it('rejects over-credit, bad ACK, protocol errors and missing real IDs', () => {
-    const root = workspace()
-    const dsh = captured(root, 'dsh')
-    const peer = captured(root, 'hermes')
-    peer.events.splice(4, 0, { dir: 'out', verb: 'f', body: {
-      sf: 'hermes', s: 2, ops: [['text', 'hermes.message', 'unacked']],
-    } })
-    peer.persist()
-    expect(diff(dsh, peer).status).toBe(2)
-    peer.events.splice(4, 1)
-    peer.events[4]!.body['s'] = 2
-    peer.persist()
-    expect(diff(dsh, peer).status).toBe(2)
-    peer.events[4]!.body['s'] = 1
-    peer.events.push({ dir: 'in', verb: 'e', body: { ev: 'error', msg: 'bad operation' } })
-    peer.persist()
-    expect(diff(dsh, peer).status).toBe(2)
-    peer.events.pop()
-    delete peer.events[3]!.body['ops'][0][4]['id']
     peer.persist()
     expect(diff(dsh, peer).status).toBe(2)
   })
@@ -270,7 +350,7 @@ describe('RFC #6 synthetic evidence seal safety (NOT native proof)', () => {
     expect(a.names).toContain('manifest.json')
     expect(a.names.some(name => /home|cache|runtime|unapproved/.test(name))).toBe(false)
     expect(a.manifest['source_kind']).toBe('actual-process')
-    expect(a.manifest['record_counts']).toEqual({ in: 2, out: 3 })
+    expect(a.manifest['record_counts']).toEqual({ in: 2, out: 5 })
     expect(readFileSync(e.root + '/log/dsh-sdk-wire.jsonl', 'utf8')).toContain('Ready')
     expect(existsSync(e.root + '/manifest.json')).toBe(false)
   })
