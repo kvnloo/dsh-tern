@@ -43,7 +43,7 @@ export class NativeTerminal implements Terminal {
   private answerDraft = new Draft()
   private submit: (text: string) => void = () => {}
   private interrupt: () => void = () => {}
-  private quit: () => void = () => {}
+  private quit: (error?: Error) => void = () => {}
   private last: Snapshot | undefined
   private prompt: { request: Ask; answer: (text: string | null) => void } | undefined
   private running: Promise<void> | undefined
@@ -67,12 +67,13 @@ export class NativeTerminal implements Terminal {
     })
   }
 
-  async start(submit: (text: string) => void, interrupt: () => void, quit: () => void): Promise<void> {
+  async start(submit: (text: string) => void, interrupt: () => void, quit: (error?: Error) => void): Promise<void> {
     if (this.running) throw new Error('Native terminal already started')
     this.submit = submit
     this.interrupt = interrupt
     this.quit = quit
     this.running = (async () => {
+      let failure: Error | undefined
       try {
         for await (const input of this.session) {
           if (this.stopped) break
@@ -108,9 +109,9 @@ export class NativeTerminal implements Terminal {
           }
         }
       } catch (error) {
-        if (!this.stopped) process.stderr.write('dsh Tern: ' + String(error) + '\n')
+        failure = error instanceof Error ? error : new Error(String(error))
       } finally {
-        if (!this.stopped) this.quit()
+        if (!this.stopped) this.quit(failure)
       }
     })()
   }
