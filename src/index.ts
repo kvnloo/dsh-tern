@@ -17,6 +17,7 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import { AnsiTerminal } from './ansi.ts'
+import { ResourceStack } from './lifecycle.ts'
 import { Transcript } from './model.ts'
 import { connectTern, NativeTerminal } from './native.ts'
 import { answerItem } from './questions.ts'
@@ -80,7 +81,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
   let connected: Awaited<ReturnType<typeof connectTern>> = null
   let stopping = false
   let failed: unknown
-  const release: Array<() => void> = []
+  const release = new ResourceStack()
   const done = Promise.withResolvers<void>()
   let lastInterrupt = 0
 
@@ -122,7 +123,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
     }
     for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
       process.on(signal, stopOnSignal)
-      release.push(() => { process.off(signal, stopOnSignal) })
+      release.add(() => { process.off(signal, stopOnSignal) })
     }
 
     connected = config.native === false ? null : await connectTern()
@@ -164,22 +165,22 @@ async function run(ctx: Context, config: Config): Promise<void> {
       show()
     }
 
-    release.push(ctx.on('session/event', (session, event) => {
+    release.add(ctx.on('session/event', (session, event) => {
       if (session !== agent.session) return
       transcript.accept(event)
       show()
     }, { global: true }))
-    release.push(ctx.on('agent/assistant-stream', ({ agent: subject, frame }) => {
+    release.add(ctx.on('agent/assistant-stream', ({ agent: subject, frame }) => {
       if (subject !== agent) return
       transcript.stream(frame)
       show()
     }, { global: true }))
-    release.push(ctx.on('agent/status', ({ agent: subject, status }) => {
+    release.add(ctx.on('agent/status', ({ agent: subject, status }) => {
       if (subject !== agent) return
       transcript.status(status)
       show()
     }, { global: true }))
-    release.push(ctx.on('approval/request', async (request, next) => {
+    release.add(ctx.on('approval/request', async (request, next) => {
       if (request.agent !== agent) return next()
       const answer = await display.ask({
         title: 'Allow once: ' + request.toolName + '?',
@@ -192,7 +193,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
       })
       return answer === 'allowed-once' ? 'allowed-once' : request.signal?.aborted ? 'cancelled' : 'rejected'
     }, { global: true }))
-    release.push(ctx.on('user-questions/request', async (request, next) => {
+    release.add(ctx.on('user-questions/request', async (request, next) => {
       if (request.agent !== agent) return next()
       const answers = []
       for (const question of request.questions) {
@@ -224,7 +225,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
     const cleanup = async (action: () => void | Promise<void>): Promise<void> => {
       try { await action() } catch (error) { cleanupErrors.push(error) }
     }
-    for (const dispose of release.reverse()) await cleanup(dispose)
+    await cleanup(() => release.close())
     if (handle?.agent.status === 'running') handle.agent.cancel({ kind: 'disposed' })
     if (terminal) await cleanup(() => terminal!.closed())
     else if (connected) await cleanup(() => connected!.session.close())
