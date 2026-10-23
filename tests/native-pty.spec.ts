@@ -36,6 +36,20 @@ class Output implements TermOutput {
     return Array.from(this.text.matchAll(/\x1b_tsp;f;([\s\S]*?)\x1b\\/g)).map(
       match => JSON.parse(match[1]!) as Record<string, unknown>)
   }
+  /** Reconstruct the public editor text ops instead of inspecting packet substrings. */
+  editorText(): string {
+    let value = ''
+    for (const frame of this.frames()) {
+      if (!Array.isArray(frame['ops'])) continue
+      for (const op of frame['ops']) {
+        if (!Array.isArray(op) || op[1] !== 'dock.composer.line.input') continue
+        if (op[0] === 'text' && typeof op[3] === 'string') {
+          value = op[2] === 'append' ? value + op[3] : op[3]
+        }
+      }
+    }
+    return value
+  }
 }
 
 const hello = {
@@ -124,7 +138,7 @@ describe('native TUI real 0.1.0 SDK / PTY / composer', () => {
     const f = await fixture()
     try {
       f.push('unsent work')
-      await vi.waitFor(() => expect(f.output.text).toContain('unsent work'))
+      await vi.waitFor(() => expect(f.output.editorText()).toBe('unsent work'))
       const decision = f.terminal.ask({
         title: 'Allow once?', choices: [
           { label: 'Allow once', value: 'allowed-once' },

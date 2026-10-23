@@ -23,11 +23,15 @@ pnpm dsh tui --no-native
 ~~~
 
 Outside Tern, Node readline is a complete
-line-oriented ANSI/PTY fallback. It does not require a custom cell renderer
+line-oriented ANSI/PTY fallback. Approval/question input uses an isolated
+readline parser. TTY drafts and cursor positions are restored using public
+readline writes; pipes retain partial UTF-8 lines under explicit draft
+ownership so approval input never inherits an unsent user prompt. It does not require a custom cell renderer
 or terminal plugin and works in ordinary terminals and SSH sessions.
 
-The shipped package directly pins @stencil-hq/tern 0.1.0 with a frozen-lockfile
-entry; no manual SDK install is needed. Its public connect negotiates TSP,
+The shipped package pins @stencil-hq/tern 0.1.0 with a frozen-lockfile
+entry and a narrow pnpm patch rejecting unsupported hello versions;
+no manual SDK install is needed. Its public connect negotiates TSP,
 decodes PTY typing/paste, and owns framing, credits, chunking, reconciliation,
 surface focus and raw-mode restoration. Ordinary typing does NOT arrive as
 semantic editor edit events. The --no-native option always forces readline.
@@ -114,6 +118,8 @@ Unsupported semantic kinds must render using supported local primitives.
 ~~~sh
 pnpm install --frozen-lockfile --prefer-offline
 pnpm run test packages/bundle/tui-app
+pnpm run build:lib:host
+pnpm run build:lib:client
 pnpm run test:e2e apps/cli/tests/profiles/tui/tests/keyless.e2e.ts
 pnpm run typecheck
 pnpm run build

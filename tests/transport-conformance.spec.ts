@@ -88,13 +88,18 @@ describe('Tern 0.1.0 PTY handshake and parser compatibility', () => {
     expect(none.input.isRaw).toBe(false)
   })
 
-  it('rejects unsupported protocol version rather than activating a native surface', async () => {
-    const trial = await negotiate(inbound('r', { ...hello, v: 99 }))
-    try {
-      expect(trial.session).toBeNull()
-      expect(trial.input.isRaw).toBe(false)
-    } finally {
-      await trial.session?.close()
+  it('rejects unsupported or missing hello versions before activating a native surface', async () => {
+    const missing: Record<string, unknown> = { ...hello }
+    delete missing['v']
+    for (const reply of [{ ...hello, v: 99 }, missing]) {
+      const trial = await negotiate(inbound('r', reply))
+      try {
+        expect(trial.session).toBeNull()
+        expect(trial.input.isRaw).toBe(false)
+        expect(trial.output.text).toContain('\x1b[c')
+      } finally {
+        await trial.session?.close()
+      }
     }
   })
 

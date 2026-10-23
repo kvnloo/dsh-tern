@@ -73,9 +73,6 @@ export async function connectTern(
   return { sdk: { node }, session, recorder }
 }
 
-const EDITOR = 'dock.composer.line.input'
-const ANSWER = 'layer.question.answer'
-
 export class NativeTerminal implements Terminal {
   private surface: TernSurface
   private epoch = 0
@@ -391,7 +388,10 @@ export class NativeTerminal implements Terminal {
       if (group) layer.push(this.n(group, { key: 'question', role: 'dsh.question' }, children))
       else layer.push(...children)
     }
-    this.recorder?.setContext({ revision: this.revision + 1, eventSeq: snapshot.latestSeq })
+    this.recorder?.setContext({
+      revision: this.revision + 1,
+      ...(snapshot.latestSeq === undefined ? {} : { eventSeq: snapshot.latestSeq }),
+    })
     this.surface.render({ main, dock, layer })
     this.revision += 1
     // Focus only an actual editor/input node. Never issue focus to rows/text.

@@ -161,6 +161,7 @@ export class TspRecorder {
           }
         }
         const parsed = !more && decoded.length <= MAX_RECONSTRUCTED_JSON ? envelope(decoded) : {}
+        const caps = this.capabilities?.()
         this.write({
           direction,
           verb: parsed.event ? split.verb + '/' + parsed.event : split.verb,
@@ -171,7 +172,7 @@ export class TspRecorder {
           ...(parsed.ack === undefined ? {} : { ack: parsed.ack }),
           ...(chunkId ? { chunkId } : {}),
           ...this.context,
-          ...(this.capabilities?.() ? { caps: this.capabilities() } : {}),
+          ...(caps === undefined ? {} : { caps }),
         })
       }
       buffer = buffer.subarray(wireBytes)

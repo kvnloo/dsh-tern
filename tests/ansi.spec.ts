@@ -6,9 +6,9 @@ import type { Snapshot } from '../src/model.ts'
 const active: AnsiTerminal[] = []
 afterEach(async () => { for (const terminal of active.splice(0)) await terminal.closed() })
 
-function fixture() {
-  const stdin = Object.assign(new PassThrough(), { isTTY: false })
-  const stdout = Object.assign(new PassThrough(), { isTTY: false })
+function fixture(isTTY = false) {
+  const stdin = Object.assign(new PassThrough(), { isTTY })
+  const stdout = Object.assign(new PassThrough(), { isTTY, columns: 80 })
   let text = ''
   stdout.on('data', data => { text += String(data) })
   const terminal = new AnsiTerminal({ stdin, stdout })
@@ -70,6 +70,55 @@ describe('ANSI fallback does not require a Tern SDK', () => {
     f.stdin.write(' rest\n')
     await new Promise(resolve => setImmediate(resolve))
     expect(received).toEqual(['unsent rest'])
+  })
+
+  it('restores a TTY draft and caret through public readline writes', async () => {
+    const f = fixture(true)
+    const received: string[] = []
+    await f.terminal.start(value => received.push(value), () => {}, () => {})
+    f.stdin.write('AC')
+    f.stdin.write('\x1b[D')
+    await new Promise(resolve => setImmediate(resolve))
+    const answer = f.terminal.ask({
+      title: 'Allow?', choices: [{ label: 'Deny', value: 'rejected' }],
+    })
+    f.stdin.write('1\r')
+    expect(await answer).toBe('rejected')
+    f.stdin.write('B\r')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(received).toEqual(['ABC'])
+  })
+
+  it('restores a piped partial draft after a cancelled question', async () => {
+    const f = fixture()
+    const received: string[] = []
+    await f.terminal.start(value => received.push(value), () => {}, () => {})
+    f.stdin.write('before')
+    await new Promise(resolve => setImmediate(resolve))
+    const controller = new AbortController()
+    const answer = f.terminal.ask({ title: 'Approve?', signal: controller.signal })
+    controller.abort()
+    expect(await answer).toBeNull()
+    f.stdin.write(' after\n')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(received).toEqual(['before after'])
+  })
+
+  it('keeps split UTF-8 pending bytes owned by the ordinary piped draft', async () => {
+    const f = fixture()
+    const received: string[] = []
+    await f.terminal.start(value => received.push(value), () => {}, () => {})
+    const unicode = Buffer.from('é', 'utf8')
+    f.stdin.write(unicode.subarray(0, 1))
+    const answer = f.terminal.ask({
+      title: 'Allow?', choices: [{ label: 'No', value: 'rejected' }],
+    })
+    f.stdin.write('1\n')
+    expect(await answer).toBe('rejected')
+    f.stdin.write(unicode.subarray(1))
+    f.stdin.write(' sent\n')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(received).toEqual(['é sent'])
   })
 
   it('offers every choice and accepts a multi-select comma answer', async () => {

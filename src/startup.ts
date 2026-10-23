@@ -29,7 +29,7 @@ export function apply(ctx: Context): void {
       command.error('--session-id requires a non-empty Session id')
     }
     ctx.provide(TUI_STARTUP_SERVICE, {
-      sessionId: options.sessionId,
+      ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
       native: options.native !== false,
     } satisfies TuiStartupValues)
   })

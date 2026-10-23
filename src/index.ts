@@ -89,6 +89,9 @@ async function run(ctx: Context, config: Config): Promise<void> {
   let lastInterrupt = 0
   const ownedHandles = new Set<AgentHandle>()
   const products = new ProductServices(ctx)
+  const trackListener = (remove: () => unknown): void => {
+    release.add(() => { remove() })
+  }
 
   try {
     let selectionRef: ModelSelectionRef = { current: model.currentSelection(), assembled: undefined }
@@ -323,47 +326,48 @@ async function run(ctx: Context, config: Config): Promise<void> {
       void commands(raw).catch(warn)
     }
 
-    release.add(ctx.on('session/event', (session, event) => {
+    trackListener(ctx.on('session/event', (session, event) => {
       if (session !== agent.session) return
       transcript.accept(event)
       show()
     }, { global: true }))
-    release.add(ctx.on('agent/assistant-stream', ({ agent: subject, frame }) => {
+    trackListener(ctx.on('agent/assistant-stream', ({ agent: subject, frame }) => {
       if (subject !== agent) return
       transcript.stream(frame)
       show()
     }, { global: true }))
-    release.add(ctx.on('agent/status', ({ agent: subject, status }) => {
+    trackListener(ctx.on('agent/status', ({ agent: subject, status }) => {
       if (subject !== agent) return
       transcript.status(status)
       show()
     }, { global: true }))
-    release.add(ctx.on('approval/request', async (request, next) => {
+    trackListener(ctx.on('approval/request', async (request, next) => {
       if (request.agent !== agent) return next()
+      const detail = request.displayReason?.en ?? request.reason
       const answer = await display.ask({
         title: 'Allow once: ' + request.toolName + '?',
-        detail: request.displayReason?.en ?? request.reason,
+        ...(detail === undefined ? {} : { detail }),
         choices: [
           { label: 'Allow once', value: 'allowed-once' },
           { label: 'Deny', value: 'rejected' },
         ],
-        signal: request.signal,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
       })
       return answer === 'allowed-once' ? 'allowed-once' : request.signal?.aborted ? 'cancelled' : 'rejected'
     }, { global: true }))
-    release.add(ctx.on('user-questions/request', async (request, next) => {
+    trackListener(ctx.on('user-questions/request', async (request, next) => {
       if (request.agent !== agent) return next()
       const answers = []
       for (const question of request.questions) {
         const answer = await display.ask({
           title: question.header ? question.header + ': ' + question.question : question.question,
-          detail: question.detail,
-          choices: question.options?.map(option => ({
+          ...(question.detail === undefined ? {} : { detail: question.detail }),
+          ...(question.options === undefined ? {} : { choices: question.options.map(option => ({
             label: option.label + (option.description ? ' — ' + option.description : ''),
             value: option.label,
-          })),
-          multiple: question.multiSelect,
-          signal: request.signal,
+          })) }),
+          ...(question.multiSelect === undefined ? {} : { multiple: question.multiSelect }),
+          ...(request.signal === undefined ? {} : { signal: request.signal }),
         })
         if (answer === null) throw new Error('user question was cancelled')
         answers.push(answerItem(question, answer))
@@ -392,7 +396,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
     else if (connected) await cleanup(() => connected!.session.close())
     if (handle) {
       await cleanup(() => handle!.agent.whenIdle())
-      await cleanup(() => sessions.flush(handle!.agent.session))
+      await cleanup(async () => { await sessions.flush(handle!.agent.session) })
       await cleanup(() => handle!.dispose())
     }
     if (cleanupErrors.length) {

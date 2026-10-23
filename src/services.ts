@@ -184,6 +184,8 @@ export class ProductServices {
     const jobs = this.ctx.get('jobs')?.list(agent.id)
     const plan = this.ctx.get('planMode')?.get(agent)
     const todos = this.ctx.get('sessionProjections')?.stateOf(agent.session, 'todos')
+    const children = this.descendants.get(agent.id)
+    const detail = this.details.get(agent.id)
     return {
       ...(selection.current === undefined ? {} : {
         model: { provider: selection.current.provider, model: selection.current.model },
@@ -200,8 +202,8 @@ export class ProductServices {
         ...(job.progress ? { progress: job.progress } : {}),
         ...(job.detail ? { detail: job.detail } : {}),
       })) } : {}),
-      ...(this.descendants.has(agent.id) ? { children: this.descendants.get(agent.id) } : {}),
-      ...(this.details.has(agent.id) ? { detail: this.details.get(agent.id) } : {}),
+      ...(children === undefined ? {} : { children }),
+      ...(detail === undefined ? {} : { detail }),
     }
   }
 }
