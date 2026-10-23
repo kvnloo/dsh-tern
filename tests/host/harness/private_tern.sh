@@ -265,6 +265,14 @@ for _ in {1..100}; do
  sleep 0.05
 done
 [[ -S "$CONTROL" ]] || { echo "owned private Tern socket absent" >&2; exit 1; }
+# Tern ctl joins argv into a scenario string; quote paths for that
+# parser as well as for the invoking shell.
+scenario_quote() {
+ python3 - "$1" <<'PY'
+import shlex,sys
+print(shlex.quote(sys.argv[1]))
+PY
+}
 ctl() {
  local label="$1"; shift
  local reply
@@ -379,6 +387,21 @@ if "dock.composer" not in data and "sf-dock" not in data:
  raise SystemExit(1)
 PY
 }
+replay_ready() {
+ # Complete recordings end in out/x CLOSE and no longer have a live dock.
+ # Require a retained main semantic node/role and a real readable state.
+ ctl replay-probe-tree tree >"$BASE/control/replay-probe-tree.json" || return 1
+ ctl replay-probe-state state >"$BASE/control/replay-probe-state.json" || return 1
+ python3 - "$BASE/control/replay-probe-tree.json" "$BASE/control/replay-probe-state.json" <<'PY'
+import json,re,sys
+tree=json.dumps(json.load(open(sys.argv[1])),ensure_ascii=False)
+state=json.dumps(json.load(open(sys.argv[2])),ensure_ascii=False)
+if not re.search(r"main\\.[A-Za-z0-9]|sf-main|dsh\\.session|dsh\\.transcript",tree):
+ raise SystemExit(1)
+if not state or state=="null":
+ raise SystemExit(1)
+PY
+}
 await_native() {
  local begin="$SECONDS"
  until { wire_ready && semantic_ready startup-probe; }; do
@@ -443,21 +466,25 @@ if not stat.S_ISREG(p.st_mode) or p.st_uid!=os.getuid() or p.st_mode & 0o077:
 PY
  cp -- "$2" "$BASE/log/replay-source.jsonl"
  chmod 600 "$BASE/log/replay-source.jsonl"
- ctl replay-start surface-play "$BASE/log/replay-source.jsonl" >/dev/null
+ ctl replay-start surface-play "$(scenario_quote "$BASE/log/replay-source.jsonl")" >/dev/null
  begin="$SECONDS"
- until semantic_ready replay-probe; do
+ until replay_ready; do
    [[ "$((SECONDS-begin))" -lt 45 ]] ||
      { echo "replayed semantic tree absent; still REPLAY ONLY" >&2; exit 1; }
  done
  inspect replay
 else
- ctl app-launch run "$BASE/launch-dsh.sh" >/dev/null
+ ctl app-launch run "$(scenario_quote "$BASE/launch-dsh.sh")" >/dev/null
  if [[ "$LOCATION" == local ]]; then
    await_native
  else
    # Remote recorder writes to remote paths and is NOT a local record.
    # Tern state may show remote content; never claim local wire/Session proof.
-   semantic_ready remote-start
+   begin="$SECONDS"
+  until semantic_ready remote-start; do
+   [[ "$((SECONDS-begin))" -lt 45 ]] ||
+     { echo "remote semantic readiness absent (uncollected)" >&2; exit 1; }
+  done
  fi
  inspect live-start
  if [[ "$MODE" == live ]]; then
@@ -480,7 +507,7 @@ exec tail -n +1 -f $(printf '%q' "$BASE/log/tern-serve.log")
 EOF
    chmod 700 "$BASE/log-pane.sh"
    ctl log-pane-split split right >/dev/null
-   ctl log-pane-run run "$BASE/log-pane.sh" >/dev/null
+   ctl log-pane-run run "$(scenario_quote "$BASE/log-pane.sh")" >/dev/null
    ctl app-pane-focus focus left >/dev/null
    inspect live-split
    ctl viewport-resize resize 1024 768 >/dev/null
