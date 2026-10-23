@@ -259,7 +259,7 @@ describe('native TUI real 0.1.0 SDK / PTY / composer', () => {
   })
 
   it('ignores an old visible approval send after a replacement is rendered', async () => {
-    const f = await fixture(['col', 'row', 'text', 'card', 'md', 'editor', 'input'])
+    const f = await fixture(['col', 'row', 'text', 'card', 'md', 'editor', 'input', 'overlay'])
     const controller = new AbortController()
     try {
       const old = f.terminal.ask({
