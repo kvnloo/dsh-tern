@@ -339,9 +339,9 @@ syntax and **117 focused tests in 18 files**. Its source PTY matrix with
 `--retry=0` was **11 PASS / 4 FAIL** out of 15; these are historical
 results at that exact prior SHA, **not a pass for the new head**.
 
-This test-only correction retains all five keyless and nine public-service
-cases (plus the other existing PTY case), timeouts, keyless model adapter and
-normal Session/ApprovalService/UserQuestion owners. The late ANSI protocol
+This test-only correction retains all six keyless and nine public-service
+cases (15 total), their timeouts, the keyless model adapter and the normal
+Session/ApprovalService/UserQuestion owners. The late ANSI protocol
 fixture counts **source.kind=user** intents instead of including unrelated,
 legitimate durable `user/message` context. The two sequential ANSI fixture
 tool calls now assert the exact emitted name and `running` → `done`
