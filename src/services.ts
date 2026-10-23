@@ -17,11 +17,13 @@ import type {} from '@deepseek-ai/dsh-tool-todo'
 import type {} from '@deepseek-ai/dsh-plan-mode'
 import type { ProductState } from './model.ts'
 
+/** Registered provider/model route offered by the mounted LLM catalog. */
 export interface ModelChoice {
   readonly id: string
   readonly label: string
   readonly route: ModelSelection
 }
+/** Root Session eligible for explicit resume in the current working directory. */
 export interface SessionChoice {
   readonly id: SessionId
   readonly label: string
@@ -35,6 +37,10 @@ export class ProductServices {
 
   constructor(private readonly ctx: Context) {}
 
+  /** Resolve mounted providers and their models without hard-coded catalog entries.
+   * @returns Provider/model routes currently exposed by the public LLM service.
+   * @throws Error when the public LLM catalog is absent.
+   */
   async modelChoices(): Promise<ModelChoice[]> {
     const llm = this.ctx.get('llm')
     if (!llm) throw new Error('model selection requires the public llm service')
@@ -52,7 +58,12 @@ export class ProductServices {
     return choices
   }
 
-  /** Validate against the real adapter catalog before changing live or saved routing. */
+  /** Validate a route against the real catalog before updating saved and live model selection.
+   * @param reference - Agent-scoped model selection for subsequent steps.
+   * @param requested - exact provider/model catalog id.
+   * @returns Persisted provider and model selection.
+   * @throws Error for an unregistered route or missing model service.
+   */
   async selectModel(reference: ModelSelectionRef, requested: string): Promise<ModelSelection> {
     const candidates = await this.modelChoices()
     const choice = candidates.find(item => item.id === requested)
@@ -65,6 +76,10 @@ export class ProductServices {
     return choice.route
   }
 
+  /** List current working directory's root Sessions without claiming their ownership.
+   * @param cwd - exact directory recorded when the Session was opened.
+   * @returns Sessions with persisted status for explicit adoption.
+   */
   async rootSessions(cwd: string): Promise<SessionChoice[]> {
     const query = this.ctx.get('sessionQuery')
     if (!query) throw new Error('session switching requires sessionQuery')
@@ -81,7 +96,10 @@ export class ProductServices {
     }))
   }
 
-  /** List durable descendants, including diagnostics but never an invented percentage. */
+  /** Refresh public descendant facts including diagnostics, without guessed progress.
+   * @param parentId - owner Session to query for descendants.
+   * @returns Current public child and diagnostic rows.
+   */
   async refreshDescendants(parentId: SessionId): Promise<ProductState['children']> {
     const runtime = this.ctx.get('subagents')
     if (!runtime) throw new Error('subagent roster requires subagents service')
@@ -96,6 +114,11 @@ export class ProductServices {
     return children
   }
 
+  /** Inspect a public descendant and optionally its persisted surface summary.
+   * @param parent - parent Session authorizing the roster query.
+   * @param childId - requested descendant Session id.
+   * @returns Transient inspection details from public services.
+   */
   async inspectChild(parent: SessionId, childId: string): Promise<ProductState['detail']> {
     const runtime = this.ctx.get('subagents')
     if (!runtime) throw new Error('subagent roster requires subagents service')
@@ -129,7 +152,12 @@ export class ProductServices {
     return row
   }
 
-  /** User-authored child prompt via the public authorized host route. */
+  /** Deliver a user-authored instruction through the public continuable-child API.
+   * @param parent - parent Session authorizing the child.
+   * @param childId - descendant Session id.
+   * @param text - nonempty user message content.
+   * @param delivery - step-boundary steering or queued delivery.
+   */
   async steerChild(parent: SessionId, childId: string, text: string, delivery: 'steer' | 'queue'): Promise<void> {
     const row = await this.child(parent, childId)
     if (!text.trim()) throw new Error('cannot send an empty child message')
@@ -143,6 +171,10 @@ export class ProductServices {
     }, signal)
   }
 
+  /** Interrupt a continuable subagent, rejecting one-shot and unknown descendants.
+   * @param parent - authorized parent Session.
+   * @param childId - child Session to interrupt.
+   */
   async stopChild(parent: SessionId, childId: string): Promise<void> {
     const row = await this.child(parent, childId)
     const runtime = this.ctx.get('subagents')
@@ -150,12 +182,22 @@ export class ProductServices {
     runtime.interrupt(row.id, { kind: 'user', parentSessionId: row.parentId })
   }
 
+  /** Request a job stop via its owner-scoped public registry.
+   * @param owner - Session authorized to control the job.
+   * @param jobId - durable registry id.
+   * @returns Registry-defined stop result.
+   */
   stopJob(owner: SessionId, jobId: string): string {
     const jobs = this.ctx.get('jobs')
     if (!jobs) throw new Error('job control requires jobs service')
     return jobs.kill(JobId(jobId), owner, 'TUI user stopped job')
   }
 
+  /** Read retained job output non-destructively without advancing the model's cursor.
+   * @param owner - Session authorized to read the job.
+   * @param jobId - durable job identifier.
+   * @returns Bounded user-facing job details.
+   */
   inspectJob(owner: SessionId, jobId: string): ProductState['detail'] {
     const jobs = this.ctx.get('jobs')
     if (!jobs) throw new Error('job detail requires jobs service')
@@ -175,11 +217,18 @@ export class ProductServices {
     return detail
   }
 
+  /** Clear a transient inspection panel when changing Session ownership.
+   * @param owner - Session whose inspection is dismissed.
+   */
   clearDetail(owner: SessionId): void {
     this.details.delete(owner)
   }
 
-  /** Read only authoritative currently mounted services and registered projections. */
+  /** Project mounted service facts, never persisting them as Session events.
+   * @param agent - public Agent whose Session scopes product queries.
+   * @param selection - current Agent-owned route reference.
+   * @returns Snapshot product facts from public registries and projections.
+   */
   project(agent: AgentHandle['agent'], selection: ModelSelectionRef): ProductState {
     const jobs = this.ctx.get('jobs')?.list(agent.id)
     const plan = this.ctx.get('planMode')?.get(agent)

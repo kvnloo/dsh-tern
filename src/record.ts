@@ -6,8 +6,11 @@
 import { appendFileSync } from 'node:fs'
 import { splitMessage } from '@stencil-hq/tern'
 
+/** Sanitized directional SDK-wire metadata; never includes terminal payload bodies. */
 export interface TspRecord {
+  /** Raw SDK transport direction, not Agent message direction. */
   readonly direction: 'in' | 'out'
+  /** Wire verb, optionally paired with its public event kind. */
   readonly verb: string
   /** Actual UTF-8 message body size; for chunked messages, this chunk's bytes. */
   readonly payloadBytes?: number
@@ -18,9 +21,13 @@ export interface TspRecord {
   readonly surfaceId?: string
   readonly frameSeq?: number
   readonly ack?: number
+  /** Protocol chunk identifier when applicable. */
   readonly chunkId?: string
+  /** Renderer revision at capture time. */
   readonly revision?: number
+  /** Most recent durable Session event sequence. */
   readonly eventSeq?: number
+  /** Negotiated kinds, features and credit limits. */
   readonly caps?: {
     readonly kinds: readonly string[]
     readonly features: readonly string[]
@@ -108,19 +115,31 @@ export class TspRecorder {
     this.enabled = Boolean(path)
   }
 
+  /** Attribute subsequent frames to the newly adopted Session.
+   * @param sessionId - exact durable Session identity.
+   */
   setSessionId(sessionId: string): void {
     this.sessionId = sessionId
   }
 
+  /** Associate wire observations with the renderer revision and Session offset.
+   * @param context - current revision and latest event sequence metadata.
+   */
   setContext(context: { revision?: number; eventSeq?: number }): void {
     this.context = context
   }
 
+  /** Read negotiated terminal limits at capture time without storing raw messages.
+   * @param get - accessor for active SDK Session capabilities.
+   */
   setCapabilities(get: () => Caps | undefined): void {
     this.capabilities = get
   }
 
-  /** Inspect TSP frames carried by actual SDK stream reads and writes. */
+  /** Inspect complete TSP frames observed on real SDK streams, retaining no key payloads.
+   * @param direction - input or output at the terminal transport boundary.
+   * @param chunk - raw stream bytes or text; bodies are parsed only transiently.
+   */
   capture(direction: Direction, chunk: string | Uint8Array): void {
     if (!this.enabled || !this.path) return
     let buffer = join(this.pending[direction], bytesOf(chunk))
@@ -179,7 +198,9 @@ export class TspRecorder {
     }
   }
 
-  /** Metadata-only output; refuses to serialize payload bodies by construction. */
+  /** Append metadata-only JSONL with restricted permissions; disable on write failure.
+   * @param record - sanitized frame and capability facts without message content.
+   */
   write(record: TspRecord): void {
     if (!this.enabled || !this.path) return
     const line = {

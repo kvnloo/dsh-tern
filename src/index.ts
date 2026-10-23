@@ -30,8 +30,11 @@ import type { Terminal } from './terminal.ts'
 export const name = 'tui-app'
 export const inject = ['agentDefaultModel', 'agents', 'sessions']
 
+/** TUI plugin options supplied by the profile-owned command provider. */
 export interface Config {
+  /** Exact persisted root Session to resume; absent starts a new Session. */
   sessionId?: string
+  /** Probe Tern when true (default); false forces the ANSI fallback. */
   native?: boolean
 }
 export const Config: z<Config> = z.object({

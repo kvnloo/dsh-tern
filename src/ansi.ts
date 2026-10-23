@@ -9,8 +9,11 @@ import type { Readable, Writable } from 'node:stream'
 import { abortableAnswer, type Ask, type Terminal } from './terminal.ts'
 import { safeText, type Entry, type Snapshot } from './model.ts'
 
+/** Caller-owned Node input/output streams for the non-Tern terminal. */
 export interface AnsiStreams {
+  /** Human input; readline owns editing only when it is a TTY. */
   readonly stdin: Readable & { isTTY?: boolean }
+  /** Destination for text, status and answer prompts. */
   readonly stdout: Writable & { isTTY?: boolean }
 }
 
@@ -27,6 +30,9 @@ function lineOf(entry: Entry): string {
   return '[' + role + '] ' + safeText(entry.text) + '\n'
 }
 
+/** Line-oriented terminal using a single owner for composer input and safety prompts.
+ * Session events are rendered from Snapshot; readline never owns model history.
+ */
 export class AnsiTerminal implements Terminal {
   private input: Interface | undefined
   private onLine: ((text: string) => void) | undefined
@@ -111,6 +117,12 @@ export class AnsiTerminal implements Terminal {
     }
   }
 
+  /** Start one ANSI input owner; a pipe keeps UTF-8 and incomplete lines isolated.
+   * @param submit - canonical user message or slash-command callback.
+   * @param interrupt - signal current Agent cancellation on Ctrl+C.
+   * @param quit - close the application on EOF or readline closure.
+   * @returns Once the relevant stream listeners and prompt are installed.
+   */
   async start(submit: (text: string) => void, interrupt: () => void, quit: () => void): Promise<void> {
     if (this.started) throw new Error('ANSI terminal already started')
     this.started = true
@@ -135,6 +147,9 @@ export class AnsiTerminal implements Terminal {
     this.io.stdout.write('dsh> ')
   }
 
+  /** Write changed durable rows and public product facts without retransmitting unchanged rows.
+   * @param snapshot - current authoritative transcript and replaceable status.
+   */
   update(snapshot: Snapshot): void {
     if (this.lastSession !== snapshot.sessionId) {
       this.lastSession = snapshot.sessionId
@@ -190,12 +205,19 @@ export class AnsiTerminal implements Terminal {
     this.input?.prompt(true)
   }
 
+  /** Refill only the normal, non-modal composer after navigation.
+   * @param text - unsent user text, never an approval decision.
+   */
   restoreDraft(text: string): void {
     if (!this.started || this.pending) return
     if (this.input) this.openInput('dsh> ', { line: text, cursor: text.length })
     else this.pipeDraft = text
   }
 
+  /** Suspend the composer for an exclusive approval or question prompt.
+   * @param request - options and cancellation owned by the waiting service.
+   * @returns Chosen value or null; previous text and readline caret are restored.
+   */
   ask(request: Ask): Promise<string | null> {
     if (!this.started || this.pending) return Promise.resolve(null)
     if (request.signal?.aborted) return Promise.resolve(null)
@@ -236,6 +258,9 @@ export class AnsiTerminal implements Terminal {
     })
   }
 
+  /** Release this renderer's listeners and readline state without ending caller stdin.
+   * @returns Once the owned input has been detached.
+   */
   async closed(): Promise<void> {
     const input = this.input
     this.input = undefined

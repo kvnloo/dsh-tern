@@ -8,10 +8,14 @@ import { parseCmdline } from '@deepseek-ai/dsh-cmdline'
 
 export const name = 'tui-startup'
 export const inject = ['cmdlineArgs']
+/** Cordis key for the profile-owned, parsed terminal-launch options. */
 export const TUI_STARTUP_SERVICE = 'tuiStartup'
 
+/** Values published by the TUI-only CLI provider; the launcher still owns profile selection. */
 export interface TuiStartupValues {
+  /** Exact existing persistent Session id to adopt; absent means a fresh session. */
   sessionId?: string
+  /** Whether to probe Tern; false forces the ordinary ANSI renderer. */
   native: boolean
 }
 

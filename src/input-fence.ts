@@ -103,7 +103,10 @@ export class AnsiInputFence {
     }
   }
 
-  /** Begin fallback; replay probe bytes exactly once and continue parsing. */
+  /** Begin fallback; replay only SDK-classified key bytes exactly once and continue filtering late protocol frames.
+   * @returns A derived ANSI input stream; the caller owns its readline lifecycle, not the original stdin.
+   * @throws Error when an active or closed fence is activated again.
+   */
   activate(): AnsiStdin {
     if (this.disposed || this.active) throw new Error('ANSI input fence is not available')
     this.active = true

@@ -12,28 +12,60 @@ import { Draft, type NativeEdit } from './draft.ts'
 import { safeText, type Entry, type Snapshot } from './model.ts'
 import { TspRecorder } from './record.ts'
 
+/** Thin public Tern SDK surface facade; retained terminal nodes are presentation, not Session history. */
 export interface TernSurface {
+  /** True when this surface can no longer accept rendering or focus operations. */
   readonly closed: boolean
+  /** Reconcile a semantic tree using SDK-owned framing and credit accounting.
+   * @param view - current main transcript, dock and modal-layer nodes.
+   */
   render(view: { main: Node[]; dock: Node[]; layer: Node[] }): void
+  /** Transfer terminal-native focus to an editor or clear focus.
+   * @param id - semantic input node id, or null to unfocus.
+   */
   focus(id: string | null): void
+  /** Mark an immutable transcript unit eligible for terminal scrollback retention.
+   * @param id - durable renderer node identity.
+   */
   settle?(id: string): void
-  /** Forget renderer snapshots for terminal-evicted nodes, never durable log entries. */
+  /** Forget only SDK presentation references for terminal-evicted settled children.
+   * @param ids - reported child node ids; Session events remain untouched.
+   */
   forget?(ids: readonly string[]): void
-  /** Advance bounded replay only after a frame actually receives terminal credit. */
+  /** Observe SDK-acknowledged frame progress before admitting further durable history.
+   * @param listener - callback invoked with each acknowledged sequence.
+   * @returns Listener removal callback.
+   */
   onAck?(listener: (sequence: number) => void): () => void
 }
+/** Public SDK's terminal key or decoded protocol event, never parsed locally. */
 export type TernInput = SessionInput
+/** Negotiated Tern session; SDK owns raw mode, framing, limits and teardown. */
 export interface TernSession extends AsyncIterable<SessionInput> {
+  /** Open an in-band native semantic surface.
+   * @param options - SDK mode, id, title and role.
+   * @returns Renderer handle for the opened surface.
+   */
   open(options: OpenOptions): TernSurface
+  /** Close the SDK session and restore the terminal.
+   * @returns Once SDK-owned cleanup completes.
+   */
   close(): Promise<void>
+  /** Negotiated kinds, features and APC/credit limits, if a reply was received. */
   readonly caps?: { readonly kinds: readonly string[]; readonly features: readonly string[]; readonly credits?: number; readonly apc?: number }
 }
+/** Public SDK constructors used by the native presenter and test injection. */
 export interface TernSDK {
+  /** Build semantic TSP nodes through the SDK's public constructor. */
   readonly node: typeof node
+  /** Optional exported SDK connect hook for typed integration consumers. */
   readonly connect?: typeof connect
 }
 
-/** Import the published SDK as an ordinary shipped dependency, not a cast peer. */
+/** Probe native Tern via the bundled public SDK, recording only opted-in wire metadata.
+ * @param sessionId - durable Session identity used for capture attribution.
+ * @returns Negotiated SDK and recorder, or null for non-TTY/unsupported terminals.
+ */
 export async function connectTern(
   sessionId: string,
 ): Promise<{ sdk: TernSDK; session: TernSession; recorder: TspRecorder } | null> {
@@ -83,6 +115,9 @@ type ActivePrompt = {
   readonly answer: (text: string | null) => void
 }
 
+/** Native TSP renderer over one durable Session-derived Snapshot and canonical local composer.
+ * The SDK owns protocol frames, credits and input decoding; this class never persists Agent state.
+ */
 export class NativeTerminal implements Terminal {
   private surface: TernSurface
   private unlistenAcks: (() => void) | undefined
@@ -151,6 +186,12 @@ export class NativeTerminal implements Terminal {
     this.render()
   }
 
+  /** Start consuming decoded PTY keys and TSP events with one cancellation owner.
+   * @param submit - normal composer submission into the Agent request path.
+   * @param interrupt - cancel active Agent work.
+   * @param quit - terminate the application, optionally reporting a protocol error.
+   * @returns After installing the asynchronous event reader; teardown awaits it.
+   */
   async start(submit: (text: string) => void, interrupt: () => void, quit: (error?: Error) => void): Promise<void> {
     if (this.running) throw new Error('Native terminal already started')
     this.submit = submit
@@ -548,12 +589,18 @@ export class NativeTerminal implements Terminal {
     }
   }
 
+  /** Restore the unsent user composer after a navigation without submitting it.
+   * @param text - complete canonical draft, including multiline input.
+   */
   restoreDraft(text: string): void {
     if (this.prompt) return
     this.draft.restore(text, text.length)
     this.render()
   }
 
+  /** Reconcile native presentation from a durable Session projection and replaceable hints.
+   * @param snapshot - next shared view; a new Session resets only renderer caches.
+   */
   update(snapshot: Snapshot): void {
     const previous = this.last
     if (previous && previous.sessionId !== snapshot.sessionId) {
@@ -575,6 +622,10 @@ export class NativeTerminal implements Terminal {
     this.render()
   }
 
+  /** Give an approval or question its own transient modal input ownership.
+   * @param request - human decision and cancellation contract.
+   * @returns Selected value, or null on cancellation/closed prompt.
+   */
   ask(request: Ask): Promise<string | null> {
     if (this.prompt || this.stopped) return Promise.resolve(null)
     this.answerDraft = new Draft()
@@ -593,6 +644,9 @@ export class NativeTerminal implements Terminal {
     })
   }
 
+  /** End pending human input, release ACK listeners and close the SDK transport.
+   * @returns When SDK teardown and the input reader have both completed.
+   */
   async closed(): Promise<void> {
     if (this.stopped) return
     this.stopped = true

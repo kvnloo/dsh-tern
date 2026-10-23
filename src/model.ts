@@ -6,16 +6,24 @@ import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 
+/** Presentation role for one stable, session-derived row; not a Session event type. */
 export type EntryKind = 'user' | 'assistant' | 'tool' | 'error' | 'notice'
 /** Provenance from public tool/call, tool/result, and turn/end events. */
 export type ToolStatus = 'running' | 'done' | 'error' | 'cancelled'
+/** Tool identity and lifecycle established by public Session tool events. */
 export interface ToolFacts {
+  /** Public tool name from the durable call. */
   readonly name: string
+  /** Latest durable tool status; one call retains its stable row identity. */
   readonly status: ToolStatus
 }
+/** Renderable transcript row with stable identity independent of screen index. */
 export interface Entry {
+  /** Durable event, assistant turn/step, or tool-call identity. */
   readonly id: string
+  /** User, assistant, tool, error or notice presentation role. */
   readonly kind: EntryKind
+  /** Screen-safe text; not an authoritative replacement for Session content. */
   readonly text: string
   /** Present only when a public tool/call establishes the tool identity. */
   readonly tool?: ToolFacts
@@ -37,28 +45,44 @@ export interface ProductState {
   readonly detail?: { readonly id: string; readonly title: string; readonly text: string }
 }
 
+/** Immutable view shared by ANSI and Tern; live text and editor are display hints. */
 export interface Snapshot {
+  /** Exact Session identity whose events populate this projection. */
   readonly sessionId: string
   readonly product?: ProductState
+  /** Stable durable entries; an ordinary snapshot may window these for output. */
   readonly entries: readonly Entry[]
+  /** Replaceable uncommitted assistant delta, never appended to history. */
   readonly live: string
+  /** Attempt's eventual assistant row id, for reconciliation without duplication. */
   readonly liveId?: string
+  /** Last processed Session event sequence, if any. */
   readonly latestSeq?: number
+  /** Live Agent execution state, distinct from durable events. */
   readonly status: 'idle' | 'running'
+  /** Unsent user composer text. */
   readonly draft: string
+  /** Composer caret measured in UTF-16 code units. */
   readonly cursor: number
+  /** Latest user-facing status/error notice; not a model message. */
   readonly notice: string
 }
 
 const MAX_ENTRIES = 240
 const MAX_TEXT = 64 * 1024
 
-/** Remove terminal controls from untrusted tool/model text without dropping newlines. */
+/** Strip unsafe terminal controls and bound display text without removing newlines.
+ * @param text - untrusted provider, tool or user content.
+ * @returns Terminal-safe presentation text, capped at the display text limit.
+ */
 export function safeText(text: string): string {
   return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '').slice(0, MAX_TEXT)
 }
 
-/** Message content includes non-text blocks; show text without leaking binary payloads. */
+/** Project only text blocks from a multi-modal message; never stringify binary data.
+ * @param content - content blocks from a durable Session message.
+ * @returns Concatenated terminal-safe text, with non-text blocks omitted.
+ */
 export function textContent(content: readonly unknown[]): string {
   return safeText(content.map(block => {
     if (block === null || typeof block !== 'object') return ''
@@ -67,8 +91,11 @@ export function textContent(content: readonly unknown[]): string {
   }).join(''))
 }
 
-/** One session's current durable projection. Only ordinary snapshots are windowed. */
+/** One Session's durable transcript projection, with replaceable live preview and editor state.
+ * Windowing limits ordinary screen work only; the complete Session log remains authoritative.
+ */
 export class Transcript {
+  /** The Session this projection is bound to for its lifetime. */
   readonly sessionId: string
   private lastSequence = -1
   private readonly seen = new Set<number>()
@@ -85,6 +112,10 @@ export class Transcript {
 
   constructor(sessionId: string) { this.sessionId = sessionId }
 
+  /** Replay existing Session history before any new live events are presented.
+   * @param session - authoritative event log for this transcript's identity.
+   * @throws Error if a required durable event is missing during replay.
+   */
   replay(session: Session): void {
     const length = session.seq
     for (let seq = 0; seq < length; seq++) {
@@ -106,6 +137,10 @@ export class Transcript {
 
   }
 
+  /** Merge one durable event by stable identity, including tool results and cancellation.
+   * @param event - committed Session event from the public event service.
+   * @returns Updated display row, or undefined for status-only/already-seen events.
+   */
   accept(event: SessionEvent): Entry | undefined {
     if (this.seen.has(event.seq)) return
     this.seen.add(event.seq)
@@ -200,7 +235,9 @@ export class Transcript {
     return entry
   }
 
-  /** Revisions and attempt ids fence superseded live attempts. */
+  /** Keep only the current attempt's transient text; committed messages own durable history.
+   * @param frame - assistant stream event with attempt identity and text deltas.
+   */
   stream(frame: AssistantStreamFrame): void {
     if (frame.type === 'start') {
       this.attempt = frame.attemptId
@@ -217,15 +254,26 @@ export class Transcript {
     }
   }
 
+  /** Update the live Agent status without writing a Session event.
+   * @param value - public Agent running or idle state.
+   */
   status(value: 'idle' | 'running'): void { this.currentStatus = value }
+  /** Publish terminal-safe feedback outside the model conversation.
+   * @param message - status or error string for the user.
+   */
   notice(message: string): void { this.currentNotice = safeText(message) }
+  /** Replace the unsent composer display hint.
+   * @param text - full draft value.
+   * @param cursor - caret offset in UTF-16 code units.
+   */
   draft(text: string, cursor = text.length): void {
     this.currentDraft = text
     this.currentCursor = cursor
   }
-  /**
-   * Ordinary snapshots cap screen work; the interactive renderer requests the
-   * complete durable projection so history is never silently erased.
+  /** Create an immutable renderer snapshot from current Session and transient state.
+   * Ordinary snapshots limit rows; native replay requests the complete durable projection.
+   * @param options - full-history flag and current public product-service facts.
+   * @returns Display state; never a replacement for the Session event log.
    */
   snapshot(options: { all?: boolean; product?: ProductState } = {}): Snapshot {
     return {

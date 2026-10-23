@@ -3,7 +3,11 @@ import type {
   AskUserQuestionAnswer, AskUserQuestionItem,
 } from '@deepseek-ai/dsh-user-questions'
 
-/** Parse one answer without substituting unrecognized text for offered labels. */
+/** Parse one answer without substituting unrecognized text for offered labels.
+ * @param question - the core service's question including offered choices and multi-select policy.
+ * @param text - the terminal answer, optionally comma-separated option numbers or labels.
+ * @returns The question id, deduplicated selected labels and optional free-form custom text.
+ */
 export function answerItem(question: AskUserQuestionItem, text: string): AskUserQuestionAnswer['answers'][number] {
   const options = question.options ?? []
   if (!options.length) return { id: question.id, selected: [], custom: text }

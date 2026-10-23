@@ -4,6 +4,7 @@
  */
 import type { Key } from '@stencil-hq/tern'
 
+/** One optimistic native-editor change; all ranges, lengths and caret offsets use UTF-16 code units. */
 export interface NativeEdit {
   readonly from: number
   readonly to: number
@@ -12,20 +13,30 @@ export interface NativeEdit {
   readonly len: number
 }
 
+/** Canonical local composer text and caret, independent of Tern's presentation cache. */
 export class Draft {
   private value = ''
   private caret = 0
   private readonly undoStack: Array<{ text: string; cursor: number }> = []
 
+  /** Current unsent text, including line breaks. */
   get text(): string { return this.value }
+  /** Caret offset in UTF-16 code units. */
   get cursor(): number { return this.caret }
 
+  /** Replace the draft and record a reversible edit.
+   * @param value - full replacement text.
+   */
   set(value: string): void {
     this.undoStack.push({ text: this.value, cursor: this.caret })
     this.value = value
     this.caret = value.length
   }
 
+  /** Apply an optimistic TSP edit only when its prior-length precondition holds.
+   * @param ev - replacement interval and resulting caret, in UTF-16 code units.
+   * @returns Whether the edit was accepted; stale or invalid offsets preserve the draft.
+   */
   edit(ev: NativeEdit): boolean {
     if (
       ev.len !== this.value.length
@@ -42,6 +53,9 @@ export class Draft {
     return true
   }
 
+  /** Restore the most recent local edit, if present.
+   * @returns Whether an undo state was available and restored.
+   */
   undo(): boolean {
     const previous = this.undoStack.pop()
     if (!previous) return false
@@ -50,7 +64,11 @@ export class Draft {
     return true
   }
 
-  /** Apply PTY keys decoded by the public Tern SDK; TSP edit events are not typing. */
+  /** Apply PTY keys decoded by the public Tern SDK; TSP edit events are not typing.
+   * Cursor movement avoids splitting surrogate pairs, while offsets remain UTF-16.
+   * @param key - decoded ordinary terminal key or paste text.
+   * @returns Whether the key changed the draft or caret.
+   */
   key(key: Key): boolean {
     const before = this.value
     const at = this.caret
@@ -107,13 +125,19 @@ export class Draft {
     return replace(at, at, key.text)
   }
 
-  /** Set an editor value only when it actually changes; retain caret when requested. */
+  /** Restore a canonical draft after transient navigation and clear local undo history.
+   * @param text - complete unsent text.
+   * @param cursor - caret offset in UTF-16 code units, clamped to the text length.
+   */
   restore(text: string, cursor: number): void {
     this.value = text
     this.caret = Math.max(0, Math.min(text.length, cursor))
     this.undoStack.length = 0
   }
 
+  /** Atomically consume the unsent draft and clear local editor state.
+   * @returns The complete previous draft, without trimming or normalization.
+   */
   take(): string {
     const value = this.value
     this.value = ''

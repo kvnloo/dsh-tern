@@ -1,20 +1,33 @@
 ---
-description: "Interactive DeepSeek Harness terminal profile: native Tern Surface Protocol or ordinary ANSI."
+description: "Interactive DeepSeek Harness terminal profile with Tern Surface Protocol and ANSI fallback."
 kind: "package-bundle"
 ---
 
 # @deepseek-ai/dsh-tui-app
 
+English | [中文](README.zh.md)
+
 ## Summary
 
-The TUI is a normal DSH plugin bundle layered over dsh-base. It creates or
-resumes a root Agent through the existing registry, projects durable Session
-events into one view model, and supports multiple turns without changing the
-Agent loop. Other application profiles are unaffected.
+The TUI is a named DeepSeek Harness application bundle layered over [dsh-base](../base/README.md). It creates or resumes a root Agent through public services, projects durable Session events into one transcript, and presents the same state through native Tern Surface Protocol (TSP) or ordinary ANSI. It has no separate Agent runtime, and other application profiles remain independent.
 
+## Table of Contents
+
+- [Use this package](#use-this-package)
+- [Understand the implementation](#understand-the-implementation)
+- [Further Exploration](#further-exploration)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+-----
+
+<a id="use-this-package"></a>
 ## Use this package
 
-From a workspace checkout:
+### Launch and input modes
+
+From an installed workspace checkout with generated source aliases, launch the profile through the supported dsh CLI rather than executing the package directly:
 
 ~~~sh
 pnpm dsh tui
@@ -22,136 +35,23 @@ pnpm dsh tui --session-id session-existing
 pnpm dsh tui --no-native
 ~~~
 
-Outside Tern, Node readline is a complete
-line-oriented ANSI/PTY fallback. Approval/question input uses an isolated
-readline parser. TTY drafts and cursor positions are restored using public
-readline writes; pipes retain partial UTF-8 lines under explicit draft
-ownership so approval input never inherits an unsent user prompt. It does not require a custom cell renderer
-or terminal plugin and works in ordinary terminals and SSH sessions.
+The native path uses the pinned, bundled `@stencil-hq/tern@0.1.0` SDK for hello/DA1 negotiation, PTY key decoding, in-band framing, chunking, credits, input focus and terminal restoration. A terminal without negotiated native support falls back to Node readline; `--no-native` forces that line-oriented ANSI mode even inside Tern. No separate Tern plugin or manual SDK installation is required.
 
-On ANSI fallback, `src/input-fence.ts` replays buffered probe keys once and
-filters late TSP replies. After readline closes and restores TTY raw mode, the
-fence ends only its derived input and pauses the real source if no other reader
-remains; it never destroys `process.stdin`. Closing the passive probe after
-native negotiation does **not** pause the SDK's original input. Active external
-readers retain their stream, even if ANSI backpressure had paused it.
+ANSI preserves unsent text and readline cursor position across approval prompts. Piped input retains partial UTF-8 lines separately from the approval buffer. The SDK-based input fence buffers keys received during probing and filters late APC/OSC replies before readline; on close it releases only its own derived input and listeners, without destroying the process input stream. A passive probe does not pause the successfully connected SDK input.
 
-The shipped package pins @stencil-hq/tern 0.1.0 with a frozen-lockfile
-entry and a narrow pnpm patch for strict hello, settled-node cache forgetting,
-ACK progress, and credit-safe close. No manual SDK install is needed. The
-public connect negotiates TSP, decodes PTY typing/paste, and owns framing,
-credits, chunking, reconciliation, surface focus and raw-mode restoration.
-Ordinary typing does NOT arrive as semantic editor edit events. The
---no-native option always forces readline.
+### Commands, sessions and human decisions
 
-Closing an inline surface never bypasses negotiated frame credits: if a
-hidden/detached window cannot ACK, unsent coalesced views and raw ops are
-abandoned without waiting indefinitely. The SDK sends one close and retains
-only the last **sent** main view, not the newest pending draft; sending does
-not guarantee an ACK before process exit. The TUI continues to drain native
-input and restore terminal modes through the SDK's Session.close().
+Ordinary input sends a follow-up, including a queued turn while the Agent runs. `/steer TEXT` requests step-boundary steering; `/stop` cancels active work, `/quit` exits, and `/help` lists commands. Ctrl+C cancels a running turn and exits on a second idle press; Ctrl+D exits native mode and EOF closes ANSI.
 
-A line of ordinary text queues a follow-up. While a turn is running,
-new input queues another turn; `/steer TEXT` sends step-boundary steering.
-`/stop` cancels current work; `/quit` exits. Model selection uses the
-mounted `llm.listProviders/listModels` catalog and
-`agentDefaultModel.saveSelection`, then updates the Agent-scoped selection
-for the next admitted step. `/models` or `/model` opens a picker;
-`/model PROVIDER/MODEL` selects a catalog route directly.
+Use `/models` or `/model` for the live provider catalog picker; `/model PROVIDER/MODEL` validates a route through `llm.listProviders` and `llm.listModels`, saves it through `agentDefaultModel`, and changes the Agent-scoped selection for subsequent steps. `/sessions` enumerates resumable root Sessions in the same working directory; `/resume ID` and `/new` change ownership only after the active Agent becomes idle. Resume refuses missing persistence, an already-owned Agent, a foreign working directory, or a preset/subagent Session.
 
-`/sessions` lists resumable, same-directory root Sessions from
-`sessionQuery`. `/resume ID` and `/new` switch through the ordinary
-Agent registry, preserving each Session's durable history and request
-model routing. Running turns must finish or be stopped first; transient
-pickers and switches never send the existing composer as a model prompt.
+`/plan`, `/tasks`, `/jobs`, `/job ID` and `/job-stop ID` read or control public plan, todo and job services; job detail reads retained output without consuming a model-facing cursor. `/agents`, `/agent ID`, `/agent-steer ID TEXT` and `/agent-stop ID` use the public descendant registry and continuable-child controls. Both renderers show source lifecycle labels and stable ids without inventing completion percentages; `/session` reports the active identity.
 
-`/plan` and `/tasks` expose logged plan and todo states. `/jobs`,
-`/job ID`, `/job-stop ID` use the public job registry, including a
-non-consuming read of retained output. `/agents`, `/agent ID`,
-`/agent-steer ID TEXT`, `/agent-stop ID` browse and control continuable
-descendants through `subagents`; no one-shot control is fabricated.
-Both ANSI and native project stable job, task and child identities with
-their source lifecycle labels, without guessed completion percentages.
-`/session` shows the active ID; `/help` lists commands. Ctrl+C cancels
-active work and exits on two presses while idle; Ctrl+D exits the native
-UI, EOF exits ANSI.
+Approval offers Allow once or Deny; unanswered or aborted approval fails closed. Questions support offered options, free-form answers and multiple selections. Both renderers give the question exclusive input ownership and preserve the normal unsent composer instead of treating it as an answer or model prompt.
 
-Human approval explicitly offers Allow once / Deny and fails closed when
-unanswered. Typed user-question answers, including multiple selections,
-travel over the existing Cordis waterfall. Both backends preserve an unsent
-normal composer across safety questions; ANSI also saves/restores readline's
-cursor and draft.
+### Keyless profile and private Tern reproduction
 
-## Understand the implementation
-
-- src/index.ts owns root-Agent lifecycle, resume admission, scoped listeners,
-  answerer waterfalls and application shutdown.
-- src/model.ts projects the durable Session log; live model deltas are
-  replaceable view hints and never added as durable transcript entries.
-  Its complete durable projection is never truncated by display-window limits.
-  Cancellation can retain a nonempty partial assistant reply as a durable
-  `assistant/message` with `interrupted: true`. Resume/replay preserves its
-  canonical text and identity; the shared view model labels it `Interrupted response`
-  for both ANSI and native Tern instead of presenting it as a completed reply.
-- src/services.ts reads public model, session, job, plan, todo and subagent
-  registries, and routes user requests to their owning APIs, not Agent internals.
-- src/ansi.ts renders the same state using Node readline.
-- src/native.ts uses public Tern SDK connect/open/node/render/focus/settle,
-  real PTY keys and native edit/send/undo handlers. The editor uses UTF-16
-  offsets, rejects stale edits, and submits supplied native send text
-  atomically. A missing whole surface creates a distinct new surface epoch.
-- src/terminal.ts, src/draft.ts, src/questions.ts, src/lifecycle.ts and
-  src/record.ts own decision routing, resource teardown and opt-in metadata
-  capture independently of model execution. The metadata recorder observes
-  actual SDK input/output wire bytes, TSP verbs, frame sequences, ACKs and
-  negotiation, without writing user or model bodies to its output file.
-
-References: Tern / OMP by Can Bölük (Stencil Labs), with public SDK\n`@stencil-hq/tern` 0.1.0; the public Hermes for Tern frontend at
-https://github.com/kvnloo/hermes-tern ; the earlier Hermes TSP PR at
-https://github.com/kvnloo/hermes-agent/pull/431 .
-
-## Model Experience
-
-None. The profile contributes no additional model tools, system text,
-or token instructions; submitted prompts use standard Agent follow-up
-and steering APIs.
-
-#### KV Cache effect
-
-None beyond ordinary requests. Presentation and live-stream buffers do
-not enter the model's context prefix.
-
-## RFC #6 acceptance and reproduction
-
-The Draft PR remains incomplete until independent execution confirms the full
-RFC #6 matrix. The following are release gates, not waived requirements:
-shipped-profile PTY and real Tern end-to-end tests, tool approval and
-multi-select scenarios, durable replay consistency, OMP/Hermes differential
-captures, detach/reattach and gone/settle recovery, tmux/SSH/ConPTY,
-capability downgrades, resize/theme/visibility, event parser fuzzing,
-APC/credit limits and chunking, cancellation, startup failure and teardown.
-Unsupported semantic kinds must render using supported local primitives.
-
-### Test without provider keys
-
-~~~sh
-pnpm install --frozen-lockfile --prefer-offline
-pnpm run test packages/bundle/tui-app
-pnpm run build:lib:host
-pnpm run build:lib:client
-pnpm run test:e2e apps/cli/tests/profiles/tui/tests/keyless.e2e.ts
-pnpm run typecheck
-pnpm run build
-pnpm run hygiene
-pnpm run doc-sync
-~~~
-
-The test-only plugin at
-`apps/cli/tests/profiles/tui/fixtures/tui-llm.ts` is a deterministic
-LLM **adapter** mounted through a real profile. It does not replace the
-Agent, Session, tool registry or approval runtime; it supplies tool, normal,
-and intentional `[failure]` stream paths without model keys or network
-inference. A real Tern session can be exercised with:
+The test-only `apps/cli/tests/profiles/tui/fixtures/tui-llm.ts` supplies a deterministic LLM adapter through the real profile; it does not replace the Agent, Session, tools or approvals, and requires no provider key. After installing dependencies and preparing the source/build artifacts, an isolated Tern session can launch the fixture with private storage:
 
 ~~~sh
 mkdir -p /tmp/dsh-tui-private
@@ -161,84 +61,94 @@ DSH_TSP_RECORD=/tmp/dsh-tui-private/metadata.jsonl \
 pnpm dsh --profile tui --patch apps/cli/tests/profiles/tui/fixtures/cordis.yml
 ~~~
 
-Enter `first`, paste a multiline message, `[tool]`, `[failure]`,
-`/stop`, `/session`, then `/quit`. For real input, repeat the same
-script inside and outside Tern and inspect the stable Session IDs, tool
-call/result card identity and terminal reset. `DSH_TSP_RECORD` collects actual TSP wire verbs, exact wire UTF-8
-byte lengths, body byte lengths, frame/ACK sequence numbers, negotiated kinds
-and features, monotonic time, the renderer revision and session/event identity.
-Neither ordinary PTY keys nor user/model/tool payload bodies are serialized. Full input/output TSP payloads are captured only when
-`DSH_TSP_RECORD_FULL` is explicitly set to a private path; full recordings
-contain user/tool content. Use `umask 077` before enabling that mode and
-never commit such recordings.
+Enter `first`, paste multiline text, then exercise `[tool]`, `[failure]`, `/stop`, `/session` and `/quit` inside and outside Tern. Compare durable Session identity, stable tool call/result cards, approval input routing and terminal cleanup. `DSH_TSP_RECORD` stores wire direction, operation, actual UTF-8 body/wire byte lengths, chunk and frame/ACK facts, negotiated capabilities, revision and event sequence, without saving prompt, model, tool or ordinary key contents. `DSH_TSP_RECORD_FULL` instead captures sensitive full SDK payloads: use `umask 077`, a privately owned path, and never publish or commit those recordings.
 
-For differential OMP/Hermes recordings, replay the same input sequence using
-Hermes x Tern `kvnloo/hermes-tern/frontend`, capture its SDK frames with
-`TERN_TSP_RECORD`, and DSH's with `DSH_TSP_RECORD_FULL`. Keep fixture
-files private, normalize timestamps and ephemeral surface epoch suffixes,
-and compare semantic actions, stable call IDs, settled states, and text
-ownership rather than raw escape byte order. SDK-only tests are not daemon,
-SSH, multiplexing or platform acceptance evidence.
+-----
 
-## Dev Note
+<a id="understand-the-implementation"></a>
+## Understand the implementation
 
-Mock-SDK callback tests are insufficient on their own: use the real
-`KeyDecoder` tests, keyless profile test and a private real-Tern capture.
-No command result is claimed by this document; OMP must run and inspect
-the relevant focused tests and runtime matrix before promotion.
+### Session authority and presentation
 
-## Retention and packed-consumer regression gates (TRN6)
+- `src/index.ts` owns root Agent creation/adoption, listeners, approval/question waterfalls and shutdown; `src/services.ts` reads public model, session, job, plan, todo and subagent capabilities without Agent internals.
+- `src/model.ts` derives stable user, assistant and tool rows from committed Session events. Live assistant deltas only replace a temporary preview; interruption can retain a durable partial assistant message marked interrupted, and complete durable history is never truncated by a display window.
+- `src/ansi.ts` presents shared state through readline. `src/draft.ts` owns unsent native text, undo and UTF-16 caret/edit offsets; stale editor edits cannot overwrite a newer draft. PTY typing and paste are ordinary SDK key events, not TSP edit events.
+- `src/native.ts` reconciles that state into negotiated semantic nodes, with stable tool-call identities, a native composer, bounded replay and modal question ownership. Unsupported semantic kinds use supported local presentation primitives; native send submits supplied text atomically through the same Agent callback.
+- `src/input-fence.ts`, `src/terminal.ts`, `src/questions.ts` and `src/lifecycle.ts` isolate input decisions and reverse-order cleanup. `src/record.ts` observes opt-in transport metadata, not message bodies or Agent persistence.
 
-Tern's `gone` event for a **settled child** means the native terminal
-has already forgotten that subtree; any later `del`, `move`, `set` or
-parent-before operation referencing it is invalid. The 0.1.0 Surface
-normally retains its last sent View, so filtering DSH's Snapshot alone is
-insufficient. This downstream SDK patch adds a typed `Surface.forget(ids)`
-that prunes sent, latest, pending and queued **presentation** references
-without emitting a delete or reopening the surface. The complete Session
-event log and other settled entries remain authoritative.
+### Retention, credits and packaged SDK
 
-A durable transcript exceeding the protocol's 24 MiB reassembled-message
-limit must never be sent as one initial frame. Native rendering admits a
-bounded prefix (512 KiB estimated encoded entry data per progress step,
-20 MiB maximum for an individual entry), keeps durable IDs/order intact,
-and advances only on actual SDK `Surface.onAck` callbacks. SDK credit
-accounting and frame coalescing remain authoritative. A whole-surface
-`gone` still reopens only the missing surface with its real protocol
-`open` event; a child `gone` never does. Hidden surfaces defer replay
-until visible, and no historical Session events are truncated.
+Tern owns native scrollback, focus, resizing and rendered node state; DSH owns every durable Session event. A `gone` notification for a settled child only removes corresponding SDK presentation references through the downstream `Surface.forget(ids)` extension; it never deletes the Session log or reopens an unrelated surface. A whole-surface `gone` may create a new bounded recovery epoch, while hidden surfaces wait until visible to recover. Theme and resize events reconcile the existing snapshot.
 
-The root pnpm `patchedDependencies` map supplies the fixed SDK to
-development builds, but **does not travel into a clean npm install**.
-The package-local `tsdown.config.ts` therefore bundles the patched
-`@stencil-hq/tern@0.1.0` SDK inside the shipped host `lib/index.js`.
-Do not treat a root-only patched install as consumer proof.
+Durable replay admits a bounded prefix, estimates no more than 512 KiB of serialized entry data per progress step, rejects an individual entry beyond 20 MiB and advances only on actual SDK `onAck` callbacks; this keeps complete Session identities while respecting the protocol reassembled-message limit of 24 MiB. Native close is credit-bounded: a hidden or detached terminal may leave pending frames unacknowledged, so the SDK sends at most its close and discards unsent presentation work rather than blocking shutdown. A sent frame is not proof of a terminal ACK.
 
-On the fleet-build MBP after admission/lock approval, from the repository
-root and at the **actual checked-out branch SHA**, run:
+The root pnpm patch to `@stencil-hq/tern@0.1.0` supplies the required strict hello, child-forget, ACK replay and guarded-close contract to development. A root `patchedDependencies` map does not accompany an npm consumer, so package-local `tsdown.config.ts` bundles that patched SDK into the shipped host `lib/index.js`. `pnpm pack` must verify bundled bytes against an unpatched public-registry tarball as a negative control; no registry publish or real model key is needed. Publishing files include the complete host entries, patch YAML and generated declaration tree; runtime chunks must remain bundled or otherwise included by the build.
+
+-----
+
+<a id="further-exploration"></a>
+## Further Exploration
+
+- [dsh-base](../base/README.md) — shared application composition, services and persistence.
+- [TUI RFC #6](https://github.com/kvnloo/deepseek-harness/issues/6) — the full protocol and acceptance contract.
+- [Hermes x Tern frontend](https://github.com/kvnloo/hermes-tern) — comparative native-surface implementation; credit to Can Bölük / Stencil Labs for Tern and its protocol.
+- [Hermes TSP groundwork](https://github.com/kvnloo/hermes-agent/pull/431) — comparative prior work, not a separate DSH runtime.
+- [Bilingual documentation contract](../../../docs/i18n/README.md) — how this README pair stays consistent.
+
+-----
+
+<a id="model-experience"></a>
+## Model Experience
+
+None. The profile adds no model-facing tools, system prompt, token instruction or alternate Agent path: user requests enter the standard follow-up/steering APIs.
+
+#### KV Cache effect
+
+None beyond ordinary Agent requests. Terminal frames, pending drafts, live previews and metadata capture never enter the model context prefix.
+
+## Known Limitations and Deferred Work
+
+<a id="known-limitations-and-deferred-work"></a>
+
+- **Native support is negotiated** — unsupported terminals use the ANSI fallback. Real Tern/SSH/tmux/ConPTY and detach/reattach acceptance are not established merely by SDK unit tests.
+- **Public service boundaries apply** — model selection requires mounted LLM and default-model services; Session adoption requires persistence and a compatible root Session; one-shot subagents have no continuation control.
+- **Terminal retention is not Session retention** — native settled children can disappear from Tern scrollback while persisted history remains; very large single entries exceed the safe native-message budget rather than being silently dropped.
+- **Shutdown does not promise final ACK** — hidden or detached native terminals can prevent a final acknowledgement; teardown abandons unsent presentation without losing Session persistence.
+- **RFC acceptance remains open** — keyless shipped-profile PTY and real Tern evidence must still cover approval/multiselect, true native pointer actions, credits/APC/chunking/parser fuzz, resize/theme/visibility, gone/settle, differential Hermes/OMP recordings, SSH/multiplexers/ConPTY, cancellation and fault recovery. No synthetic harness output substitutes for those checks.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+The public Tern SDK and the patched consumer must be tested at an exact checked-out Git head with a real `.git` directory. Do not suppress environment failures caused by a detached source archive. Generate source aliases before a source profile launch; the fixture uses the default-model dependency declared by the CLI manifest. Generator-written config, Cordis API and plugin catalogs and the section-keyed translation record must be refreshed canonically after JSDoc or README edits; never hand-maintain their pointers. Large V8 doc-graph heap aborts require a separate environment diagnosis, not automatic gate relaxation.
+
+Run these commands on the authorized checkout; listing them is not a claim they passed:
 
 ~~~sh
 pnpm install --frozen-lockfile --prefer-offline
+pnpm run gen-tsconfig-paths
+pnpm run gen-cordis-catalog
+pnpm run gen-config-catalog
+pnpm run gen-plugin-packages
+pnpm run verify-translation-pairing --write packages/bundle/tui-app/README.md
+pnpm run constraints
+pnpm run verify-cordis-config
+pnpm run verify-export-jsdoc
 pnpm run build:native-system
 pnpm exec vitest run packages/bundle/tui-app/tests/retention.spec.ts packages/bundle/tui-app/tests/transport-conformance.spec.ts packages/bundle/tui-app/tests/native-regressions.spec.ts
 pnpm run build:lib:host
 node packages/bundle/tui-app/tests/fixtures/verify-packed-sdk.mjs
+pnpm run test packages/bundle/tui-app
 pnpm run test:e2e apps/cli/tests/profiles/tui/tests/keyless.e2e.ts
+pnpm run typecheck
+pnpm run build
 pnpm run hygiene
 pnpm run doc-sync
 ~~~
 
-The packed-consumer gate compares a real `pnpm pack` artifact against
-the **unpatched npm registry 0.1.0** negative control: it asserts that
-the shipped JS includes Surface forget/ACK methods rather than external
-SDK imports while the registry's unmodified JS contains neither method
-nor the root hello-version guard. For an offline registry control, set
-`REGISTRY_TERN_TARBALL` to a previously downloaded **unpatched**
-registry archive. The check never installs/publishes npm packages.
+For the packed-consumer negative control, `REGISTRY_TERN_TARBALL` may point to a previously downloaded *unpatched* registry tarball. The packed fixture verifies the SDK methods and byte identity without publishing packages. Differential recording uses private `DSH_TSP_RECORD_FULL` and Hermes `TERN_TSP_RECORD` paths with timestamps and ephemeral surface epochs normalized; compare stable semantic ids, input ownership and settle behavior, not escape-byte order. GUI runs belong only in an isolated private headless compositor, never the host desktop or user daemon.
 
-A full PTY/application ANSI late-hello witness still requires the CLI
-fallback boundary (owned separately); parser-only witnesses are not proof
-that a late reply after ANSI initialization stays outside readline.
-Do not claim that gate or real Tern/SSH/ConPTY acceptance until the
-lead's authorized isolated headless environment reproduces it. All
-connector-authored changes remain **unrun** pending those checks.
+</details>
+
