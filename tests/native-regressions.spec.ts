@@ -124,9 +124,9 @@ describe('native-profile RED behavioral witnesses against the real SDK decoder',
   it('settles only durable tool results and recovers a gone native surface', async () => {
     const f = terminalFixture()
     await f.term.start(() => {}, () => {}, () => {})
-    f.term.update({ ...empty, entries: [{ id: 'tool.one', kind: 'tool', text: 'Running bash' }] })
+    f.term.update({ ...empty, entries: [{ id: 'tool.one', kind: 'tool', text: 'Running bash', tool: { name: 'bash', status: 'running' } }] })
     expect(f.settled).not.toContain('main.tool.one')
-    f.term.update({ ...empty, entries: [{ id: 'tool.one', kind: 'tool', text: 'Tool result: done' }] })
+    f.term.update({ ...empty, entries: [{ id: 'tool.one', kind: 'tool', text: 'Tool result: done', tool: { name: 'bash', status: 'done' } }] })
     expect(f.settled).toContain('main.tool.one')
     f.push({ type: 'event', event: { ev: 'gone', sf: 'dsh', ids: ['dsh'], raw: {} } })
     await f.drain()
