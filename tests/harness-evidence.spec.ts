@@ -608,3 +608,181 @@ describe('RFC #6 synthetic evidence seal safety (NOT native proof)', () => {
     expect(inspectArchive(remote.archive).manifest['source_kind']).toBe('remote-uncollected')
   })
 })
+
+/**
+ * Synthetic SDK-shaped frame operations only: exercise the real Python PTY
+ * driver's current-document discovery without starting a CLI, Agent or Tern.
+ * Live action delivery and Session truth remain in public-services.e2e.ts.
+ */
+type DriverNode = {
+  id: string
+  k: string
+  p: Record<string, unknown>
+  c?: DriverNode[]
+}
+interface DriverState {
+  actions: Record<string, string>
+  answer: string | null
+  nodes: string[]
+}
+function probePtyDriver(
+  ops: unknown[][][],
+  steps: readonly ({ action: string } | { answer: string })[] = [],
+): { states: DriverState[]; outgoing: Record<string, unknown>[]; actionsSent: { label: string; id: string }[] } {
+  const script = [
+    'import importlib.util,json,sys',
+    'spec=importlib.util.spec_from_file_location("pty_fixture_unit",sys.argv[1])',
+    'module=importlib.util.module_from_spec(spec)',
+    'assert spec and spec.loader',
+    'spec.loader.exec_module(module)',
+    'driver=module.Driver.__new__(module.Driver)',
+    'driver.frames=[]',
+    'driver.nodes={}',
+    'driver.node_changes=[]',
+    'driver.actions={}',
+    'driver.answer_id=None',
+    'driver.actions_sent=[]',
+    'snapshots=[]',
+    'for ops in json.loads(sys.argv[2]):',
+    ' driver.frames.append({"sf":"dsh","s":len(driver.frames)+1,"ops":ops})',
+    ' driver.apply_frame(driver.frames[-1])',
+    ' snapshots.append({"actions":dict(driver.actions),"answer":driver.answer_id,',
+    '                   "nodes":sorted(driver.nodes)})',
+    'sent=[]',
+    'driver.send=lambda data: sent.append(data)',
+    'driver.spec={"steps":json.loads(sys.argv[3])}',
+    'driver.steps()',
+    'outgoing=[json.loads(item.split(b";",2)[2][:-2]) for item in sent]',
+    'print(json.dumps({"states":snapshots,"outgoing":outgoing,',
+    '                  "actionsSent":driver.actions_sent}))',
+  ].join('\n')
+  const run = python('-c', [
+    script, join(harness, 'pty_driver.py'), JSON.stringify(ops), JSON.stringify(steps),
+  ])
+  expect(run.status, run.stderr).toBe(0)
+  return JSON.parse(run.stdout) as {
+    states: DriverState[]
+    outgoing: Record<string, unknown>[]
+    actionsSent: { label: string; id: string }[]
+  }
+}
+const addPtyNode = (node: DriverNode, region: 'layer' | 'dock'): unknown[] =>
+  ['add', node.id, region, null, node]
+function questionNode(
+  root: string,
+  region: 'layer' | 'dock',
+  kind: 'el' | 'row' = 'el',
+): DriverNode {
+  const choice: DriverNode = kind === 'el'
+    ? { id: root + '.choice.0', k: 'el',
+      p: { tag: 'button', role: 'dsh.question.choice', text: '1) Allow once' } }
+    : { id: root + '.choice.0', k: 'row',
+      p: { role: 'dsh.question.choice' },
+      c: [{ id: root + '.choice.0.label', k: 'text', p: { text: '1) Allow once' } }] }
+  return {
+    id: root, k: region === 'layer' ? 'overlay' : 'card',
+    p: { role: 'dsh.question', ...(region === 'layer' ? { modal: true } : {}) },
+    c: [choice, { id: root + '.answer', k: 'editor',
+      p: { text: '', sendable: true } }],
+  }
+}
+
+describe('RFC #6 synthetic PTY active-question selection (NOT live pointer proof)', () => {
+  it('routes action.click and native send only to the active modal document, excluding dock controls', () => {
+    const root = 'layer.request.abcdef987654.1'
+    const unrelated: DriverNode = {
+      id: 'dock.navigation', k: 'col', p: { role: 'dsh.navigation' },
+      c: [
+        { id: 'dock.navigation.accept', k: 'el',
+          p: { tag: 'button', text: '1) Allow once', role: 'dsh.navigation.choice' } },
+        { id: 'dock.navigation.editor', k: 'editor', p: { text: 'not an answer' } },
+      ],
+    }
+    const composer: DriverNode = {
+      id: 'dock.composer', k: 'col', p: { role: 'dsh.editor' },
+      c: [{ id: 'dock.composer.input', k: 'input',
+        p: { text: 'unsent draft', sendable: false } }],
+    }
+    const run = probePtyDriver([[
+      addPtyNode(unrelated, 'dock'), addPtyNode(composer, 'dock'),
+      addPtyNode(questionNode(root, 'layer'), 'layer'),
+    ]], [{ action: 'Allow once' }, { answer: 'Beta' }])
+    expect(run.states[0]?.actions).toEqual({ '1) Allow once': root + '.choice.0' })
+    expect(run.states[0]?.answer).toBe(root + '.answer')
+    expect(run.outgoing).toEqual([
+      { ev: 'action', sf: 'dsh', id: root + '.choice.0', act: 'click' },
+      { ev: 'send', sf: 'dsh', id: root + '.answer', text: 'Beta' },
+    ])
+    expect(run.actionsSent).toEqual([
+      { label: '1) Allow once', id: root + '.choice.0' },
+      { label: 'answer', id: root + '.answer' },
+    ])
+  })
+
+  it('uses the current dock fallback, replaces stale choices, and invalidates removed/reopened editor IDs', () => {
+    const old = 'dock.request.111111111111.1'
+    const fresh = 'dock.request.111111111111.2'
+    const different = 'dock.request.222222222222.3'
+    const first = questionNode(old, 'dock')
+    const replaced = questionNode(old, 'dock')
+    replaced.c![0] = { id: old + '.choice.1', k: 'el',
+      p: { tag: 'button', role: 'dsh.question.choice', text: '2) Deny' } }
+    const run = probePtyDriver([
+      [addPtyNode(first, 'dock')],
+      [addPtyNode(replaced, 'dock')], // same root rebuilt: old choice.0 must disappear
+      [['del', old + '.answer']],
+      [['del', old]],
+      [addPtyNode(questionNode(fresh, 'dock'), 'dock')],
+      [['del', fresh], addPtyNode(questionNode(different, 'dock'), 'dock')],
+    ], [{ action: 'Allow once' }, { answer: 'custom 😀' }])
+    expect(run.states[0]?.actions).toEqual({ '1) Allow once': old + '.choice.0' })
+    expect(run.states[1]?.actions).toEqual({ '2) Deny': old + '.choice.1' })
+    expect(run.states[1]?.nodes).not.toContain(old + '.choice.0')
+    expect(run.states[2]?.answer).toBeNull()
+    expect(run.states[2]?.actions).toEqual({ '2) Deny': old + '.choice.1' })
+    expect(run.states[3]?.actions).toEqual({})
+    expect(run.states[3]?.answer).toBeNull()
+    expect(run.states[4]?.answer).toBe(fresh + '.answer')
+    expect(run.states[5]?.actions).toEqual({ '1) Allow once': different + '.choice.0' })
+    expect(run.states[5]?.answer).toBe(different + '.answer')
+    expect(run.states[5]?.nodes).not.toContain(fresh + '.answer')
+    expect(run.outgoing).toEqual([
+      { ev: 'action', sf: 'dsh', id: different + '.choice.0', act: 'click' },
+      { ev: 'send', sf: 'dsh', id: different + '.answer', text: 'custom 😀' },
+    ])
+  })
+
+  it('extracts a negotiated row choice label from its actual child, not a historical el button', () => {
+    const root = 'dock.request.feedfacecaf0.9'
+    const run = probePtyDriver([
+      [addPtyNode(questionNode(root, 'dock', 'row'), 'dock')],
+      [['set', root + '.choice.0.label', { text: '1) Deny' }]],
+    ], [{ action: 'Deny' }, { answer: 'selected' }])
+    expect(run.states[0]?.actions).toEqual({ '1) Allow once': root + '.choice.0' })
+    expect(run.states[1]?.actions).toEqual({ '1) Deny': root + '.choice.0' })
+    expect(run.outgoing).toEqual([
+      { ev: 'action', sf: 'dsh', id: root + '.choice.0', act: 'click' },
+      { ev: 'send', sf: 'dsh', id: root + '.answer', text: 'selected' },
+    ])
+  })
+
+  it('keeps a negotiated leaf-only dock question distinct from unrelated composer and navigation', () => {
+    const root = 'dock.request.123456789abc.4'
+    const run = probePtyDriver([
+      [
+        addPtyNode({ id: 'dock.nav.choice.0', k: 'el',
+          p: { tag: 'button', text: '1) Allow once', role: 'dsh.navigation.choice' } }, 'dock'),
+        addPtyNode({ id: 'dock.composer.input', k: 'input',
+          p: { text: 'unsent draft' } }, 'dock'),
+        addPtyNode({ id: root + '.choice.0', k: 'el',
+          p: { tag: 'button', role: 'dsh.question.choice', text: '1) Allow once' } }, 'dock'),
+        addPtyNode({ id: root + '.answer', k: 'input', p: { text: '' } }, 'dock'),
+      ],
+      [['del', root + '.choice.0'], ['del', root + '.answer']],
+    ])
+    expect(run.states[0]?.actions).toEqual({ '1) Allow once': root + '.choice.0' })
+    expect(run.states[0]?.answer).toBe(root + '.answer')
+    expect(run.states[1]?.actions).toEqual({})
+    expect(run.states[1]?.answer).toBeNull()
+  })
+})
