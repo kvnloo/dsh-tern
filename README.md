@@ -37,11 +37,19 @@ native negotiation does **not** pause the SDK's original input. Active external
 readers retain their stream, even if ANSI backpressure had paused it.
 
 The shipped package pins @stencil-hq/tern 0.1.0 with a frozen-lockfile
-entry and a narrow pnpm patch rejecting unsupported hello versions;
-no manual SDK install is needed. Its public connect negotiates TSP,
-decodes PTY typing/paste, and owns framing, credits, chunking, reconciliation,
-surface focus and raw-mode restoration. Ordinary typing does NOT arrive as
-semantic editor edit events. The --no-native option always forces readline.
+entry and a narrow pnpm patch for strict hello, settled-node cache forgetting,
+ACK progress, and credit-safe close. No manual SDK install is needed. The
+public connect negotiates TSP, decodes PTY typing/paste, and owns framing,
+credits, chunking, reconciliation, surface focus and raw-mode restoration.
+Ordinary typing does NOT arrive as semantic editor edit events. The
+--no-native option always forces readline.
+
+Closing an inline surface never bypasses negotiated frame credits: if a
+hidden/detached window cannot ACK, unsent coalesced views and raw ops are
+abandoned without waiting indefinitely. The SDK sends one close and retains
+only the last **sent** main view, not the newest pending draft; sending does
+not guarantee an ACK before process exit. The TUI continues to drain native
+input and restore terminal modes through the SDK's Session.close().
 
 A line of ordinary text queues a follow-up. While a turn is running,
 new input queues another turn; `/steer TEXT` sends step-boundary steering.
