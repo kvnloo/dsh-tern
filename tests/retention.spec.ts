@@ -181,6 +181,28 @@ describe('RFC #6 real-SDK settled history retention', () => {
     } finally { await terminal.closed() }
   })
 
+  it('keeps durable siblings while hidden, then resumes after child gone without reopening', async () => {
+    const { input, oracle, terminal } = await connected()
+    const first: Entry = { id: 'hidden.first', kind: 'user', text: 'retained first' }
+    const second: Entry = { id: 'hidden.second', kind: 'assistant', text: 'retained second' }
+    try {
+      terminal.update(snapshot([first, second]))
+      await vi.waitFor(() => expect(oracle.settled.has('main.hidden.first')).toBe(true))
+      input.send(reply({ ev: 'visible', sf: 'dsh', visible: false }))
+      await new Promise(resolve => setImmediate(resolve))
+      oracle.evict('main.hidden.first')
+      input.send(reply({ ev: 'gone', sf: 'dsh', ids: ['main.hidden.first'] }))
+      await new Promise(resolve => setImmediate(resolve))
+      const whenHidden = oracle.frames.length
+      terminal.update(snapshot([first, { ...second, text: 'visible again' }]))
+      expect(oracle.frames).toHaveLength(whenHidden)
+      input.send(reply({ ev: 'visible', sf: 'dsh', visible: true }))
+      await vi.waitFor(() => expect(oracle.text('main.hidden.second.body')).toBe('visible again'))
+      expect(oracle.opens).toEqual(['dsh'])
+      expect(oracle.nodes.has('main.hidden.first')).toBe(false)
+    } finally { await terminal.closed() }
+  })
+
   it('replays more than 24 MiB of intact durable history in ACK-bounded frames, in order', async () => {
     const { oracle, terminal } = await connected()
     const entries: Entry[] = Array.from({ length: 1080 }, (_, i) => ({
