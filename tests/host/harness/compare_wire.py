@@ -174,8 +174,10 @@ def surface(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
                     {"editor", "input"} <= set(x for x in kinds if isinstance(x, str)) and
                     isinstance(features, list) and all(nonempty(x) for x in features),
                     f"{name}: negotiated native editor/input kinds absent")
-            require(type(body.get("credits")) is int and body["credits"] > 0,
-                    f"{name}: invalid initial credit limit")
+            # This startup oracle covers the observed Tern credit window (1..2);
+            # never silently treat an implausible negotiated window as a pass.
+            require(type(body.get("credits")) is int and 1 <= body["credits"] <= 2,
+                    f"{name}: invalid startup credit limit (expected 1..2)")
             require(type(body.get("apc")) is int and body["apc"] > 0,
                     f"{name}: invalid negotiated APC limit")
             hello = body
@@ -203,21 +205,51 @@ def surface(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
             require(type(seq) is int and seq == state["seq"] + 1,
                     f"{name}: nonmonotonic per-open frame sequence")
             require(isinstance(ops, list), f"{name}: malformed frame ops")
+            # @stencil-hq/tern public Op variants, also used by the real SDK
+            # retention/credit tests. Inspect exact tuple arity and value types;
+            # rejecting unknown tags is deliberate, but focus/null-focus and
+            # other documented variants are not "unknown" protocol errors.
             for op in ops:
-                require(isinstance(op, list) and op and nonempty(op[0]),
-                        f"{name}: malformed operation")
-                if op[0] == "add":
-                    require(len(op) == 5, f"{name}: malformed add operation")
+                require(isinstance(op, list) and bool(op) and nonempty(op[0]),
+                        f"{name}: malformed SDK operation")
+                tag = op[0]
+                if tag == "add":
+                    require(len(op) == 5 and nonempty(op[1]) and nonempty(op[2]) and
+                            (op[3] is None or nonempty(op[3])),
+                            f"{name}: malformed add region/parent/anchor")
                     recursive_ids(op[4], state["ids"], name)
-                elif op[0] == "text":
+                elif tag == "text":
                     require(len(op) == 4 and nonempty(op[1]) and
                             op[2] in ("replace", "append") and isinstance(op[3], str),
                             f"{name}: malformed 4-field text operation")
-                elif op[0] in ("set", "props", "del", "move", "settle"):
-                    require(len(op) >= 2 and nonempty(op[1]),
-                            f"{name}: operation lacks target ID")
+                elif tag == "set":
+                    require(len(op) == 3 and nonempty(op[1]) and isinstance(op[2], dict),
+                            f"{name}: malformed set props")
+                elif tag == "splice":
+                    require(len(op) == 5 and nonempty(op[1]) and
+                            type(op[2]) is int and op[2] >= 0 and
+                            type(op[3]) is int and op[3] >= 0 and isinstance(op[4], str),
+                            f"{name}: malformed splice offset/delete/text")
+                elif tag == "move":
+                    require(len(op) == 4 and nonempty(op[1]) and nonempty(op[2]) and
+                            (op[3] is None or nonempty(op[3])),
+                            f"{name}: malformed move id/parent/anchor")
+                elif tag in ("del", "settle"):
+                    require(len(op) == 2 and nonempty(op[1]),
+                            f"{name}: malformed {tag} node ID")
+                elif tag == "focus":
+                    # The native composer in the retained b675 TSP recording
+                    # really emits ["focus","dock.composer.line.input"] in frame2;
+                    # ["focus",null] is a supported unfocus, not a bad ID.
+                    require(len(op) == 2 and (op[1] is None or nonempty(op[1])),
+                            f"{name}: malformed focus target (string or null)")
+                elif tag in ("reveal", "scroll"):
+                    require(len(op) == 3 and nonempty(op[1]) and nonempty(op[2]),
+                            f"{name}: malformed {tag} id/position")
+                elif tag in ("suspend", "resume"):
+                    require(len(op) == 1, f"{name}: malformed {tag} operation")
                 else:
-                    raise ValueError(f"{name}: unsupported operation {op[0]!r}")
+                    raise ValueError(f"{name}: unsupported SDK operation {tag!r}")
             state["seq"] = seq
             state["frames"] += 1
             require(state["seq"] - state["acked"] <= hello["credits"],
