@@ -271,7 +271,11 @@ done
 scenario_quote() {
  python3 - "$1" <<'PY'
 import json,sys
-print(json.dumps(sys.argv[1]))
+# Tern scenarios support literal UTF-8, \\", \\\\, \\n and \\t; not JSON \\u escapes.
+value=sys.argv[1]
+if any(ord(char)<32 and char not in ("\\n","\\t") for char in value):
+ raise SystemExit("scenario path contains an unsupported control character")
+print(json.dumps(value,ensure_ascii=False))
 PY
 }
 # run is different: Tern decodes the scenario string FIRST, then sends the
@@ -281,7 +285,10 @@ PY
 run_quote() {
  python3 - "$1" <<'PY'
 import json,shlex,sys
-print(json.dumps(shlex.quote(sys.argv[1])))
+value=sys.argv[1]
+if any(ord(char)<32 and char not in ("\\n","\\t") for char in value):
+ raise SystemExit("run path contains an unsupported control character")
+print(json.dumps(shlex.quote(value),ensure_ascii=False))
 PY
 }
 ctl() {
