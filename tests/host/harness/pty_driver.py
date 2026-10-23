@@ -254,8 +254,10 @@ class Driver:
             if "id" in wanted and wanted["id"] != change["id"]:
                 return False
             props = change["p"]
-            if "contains" in wanted and wanted["contains"] not in props.get("text", ""):
-                return False
+            if "contains" in wanted:
+                actual = props.get("text")
+                if not isinstance(actual, str) or wanted["contains"] not in actual:
+                    return False
             for field in ("text", "cursor", "sendable"):
                 if field in wanted and props.get(field) != wanted[field]:
                     return False
