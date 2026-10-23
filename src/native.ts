@@ -57,6 +57,7 @@ export class NativeTerminal implements Terminal {
   private surface: TernSurface
   private epoch = 0
   private draft = new Draft()
+  private answerDraft = new Draft()
   private submit: (text: string) => void = () => {}
   private interrupt: () => void = () => {}
   private quit: () => void = () => {}
@@ -89,7 +90,11 @@ export class NativeTerminal implements Terminal {
           if (input.type === 'key' && input.key) {
             const key = input.key
             if (key.ctrl && key.name === 'c') this.prompt ? this.prompt.answer(null) : this.interrupt()
-            else if (key.ctrl && key.name === 'd') this.quit()
+            else if (this.prompt && key.name === 'escape') this.prompt.answer(null)
+            else if (this.prompt && this.prompt.request.choices && /^[1-9]$/.test(key.name)) {
+              const choice = this.prompt.request.choices[Number(key.name) - 1]
+              if (choice) this.prompt.answer(choice.value)
+            } else if (key.ctrl && key.name === 'd') this.quit()
             else if (key.name === 'enter' && !this.prompt && !key.shift) this.sendDraft()
           }
           if (input.type === 'event' && input.event?.ev === 'gone'
@@ -181,12 +186,12 @@ export class NativeTerminal implements Terminal {
         })),
         ...(!options?.length ? [
           this.node('editor', {
-            key: 'answer', text: this.draft.text, cursor: this.draft.cursor,
+            key: 'answer', text: this.answerDraft.text, cursor: this.answerDraft.cursor,
             placeholder: 'Answer', sendable: true,
-            onEdit: (edit: NativeEdit) => { if (this.draft.edit(edit)) this.render() },
+            onEdit: (edit: NativeEdit) => { if (this.answerDraft.edit(edit)) this.render() },
             onSend: (ev: { text: string }) => {
-              if (ev.text !== this.draft.text) return
-              prompt.answer(this.draft.take())
+              if (ev.text !== this.answerDraft.text) return
+              prompt.answer(this.answerDraft.take())
             },
           }),
         ] : []),
@@ -208,6 +213,7 @@ export class NativeTerminal implements Terminal {
 
   ask(request: Ask): Promise<string | null> {
     if (this.prompt || this.stopped) return Promise.resolve(null)
+    this.answerDraft = new Draft()
     return abortableAnswer(request.signal, settle => {
       const answer = (text: string | null): void => settle(text)
       this.prompt = { request, answer }
