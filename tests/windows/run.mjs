@@ -1,0 +1,467 @@
+#!/usr/bin/env node
+/**
+ * Exact-head, keyless native Windows acceptance. OS ConPTY owns the real child
+ * console. DSH CLI / profile / loader / Agent / Session / services are real.
+ * Only the provider and harmless workspace-local tool are scripted by the
+ * existing tests/host/fixtures/cordis.yml; Tern's remote peer is in-band.
+ */
+import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
+  rmSync, statSync, writeFileSync,
+} from 'node:fs'
+import { tmpdir, release } from 'node:os'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+import { ConptyPeer, GateFailure, requireGate } from './conpty-peer.mjs'
+
+const require = createRequire(import.meta.url)
+const pty = require('node-pty')
+const ptyPackage = require('node-pty/package.json')
+const root = resolve(fileURLToPath(new URL('../../', import.meta.url)))
+const pluginName = '@kvnloo/dsh-tern'
+const expectedHost = '5badb15009ae1756c3afe0ae0cef1faafc290ccc'
+const args = process.argv.slice(2)
+const options = new Map()
+for (let i = 0; i < args.length; i += 2) {
+  requireGate(['--host', '--archive', '--out'].includes(args[i]) && !!args[i + 1],
+    'usage: --host ABSOLUTE --archive ABSOLUTE --out ABSOLUTE')
+  options.set(args[i], resolve(args[i + 1]))
+}
+requireGate(options.size === 3 && args.length === 6, 'three Windows gate paths are required')
+const host = options.get('--host')
+const archive = options.get('--archive')
+const out = options.get('--out')
+requireGate([host, archive, out].every(isAbsolute), 'all gate paths must be absolute')
+mkdirSync(out, { recursive: true, mode: 0o700 })
+const cases = []
+const evidence = {
+  schema: 1,
+  qualification: 'windows-os-conpty-native-not-parser-only',
+  status: 'RED',
+  phase: 'startup',
+  inputs: {}, backend: {}, cases,
+}
+const childRoots = []
+let phase = 'startup'
+
+function step(name, fn) {
+  phase = name
+  evidence.phase = name
+  return Promise.resolve().then(fn).then(result => {
+    cases.push({ name, status: 'PASS', ...result })
+    return result
+  })
+}
+
+function gitHead(path) {
+  return execFileSync('git', ['-C', path, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+}
+
+function gitClean(path) {
+  return execFileSync('git', ['-C', path, 'status', '--porcelain', '--untracked-files=no'],
+    { encoding: 'utf8' }).trim() === ''
+}
+
+function sha256(file) {
+  return createHash('sha256').update(readFileSync(file)).digest('hex')
+}
+
+function backendCheck() {
+  requireGate(process.platform === 'win32', 'gate requires actual process.platform win32')
+  requireGate(Number(process.versions.node.split('.')[0]) >= 24, 'Node >=24 required')
+  requireGate(ptyPackage.version === '1.1.0', 'pinned node-pty 1.1.0 is required')
+  const addon = require('node-addon-api/package.json')
+  requireGate(addon.version === '7.1.0', 'pinned node-addon-api 7.1.0 is required')
+  const implementation = readFileSync(join(dirname(require.resolve('node-pty')), 'windowsPtyAgent.js'), 'utf8')
+  requireGate(implementation.includes("loadNativeModule('conpty')")
+    || implementation.includes('loadNativeModule("conpty")'),
+  'node-pty installed Windows backend does not explicitly load native ConPTY')
+  requireGate(implementation.includes('startProcess('), 'node-pty native ConPTY startProcess missing')
+  requireGate(!implementation.includes("loadNativeModule('winpty')")
+    && !implementation.includes('loadNativeModule("winpty")'),
+  'WinPTY fallback is prohibited in this gate')
+  const build = Number(release().split('.').at(-1))
+  requireGate(Number.isInteger(build) && build >= 18309, 'Windows build does not qualify for OS ConPTY')
+  const commit = gitHead(root)
+  requireGate(commit === process.env.DSH_WINDOWS_EXPECT_SHA,
+    'checkout is not the exact expected plugin PR/push head')
+  requireGate(gitHead(host) === expectedHost, 'unmodified pinned DSH host SHA mismatch')
+  requireGate(gitClean(host), 'DSH host tracked sources changed')
+  requireGate(existsSync(join(host, 'apps', 'cli', 'lib', 'bin.js')),
+    'built real DSH host CLI missing')
+  requireGate(statSync(archive).isFile() && archive.endsWith('.tgz'), 'packed plugin artifact missing')
+  evidence.inputs = {
+    pluginRepository: 'kvnloo/dsh-tern',
+    pluginGitSha: commit,
+    pluginArchiveSha256: sha256(archive),
+    hostRepository: 'kvnloo/deepseek-harness',
+    hostGitSha: expectedHost,
+    hostTrackedClean: true,
+    sdkPatchSha256Expected: 'c222b3495ade7f7b334ae4f5f94be05b2b4edb2764645dd1972f90ad436e0998',
+  }
+  evidence.backend = {
+    platform: process.platform, arch: process.arch,
+    windowsBuild: build, node: process.version,
+    nodePty: ptyPackage.version, nodeAddonApi: addon.version,
+    useConptyDll: false, backend: 'OS ConPTY via node-pty WindowsTerminal',
+  }
+  // A source assertion alone is insufficient; the subsequent preflight and
+  // real plugin cases must each observe actual ConPTY child input/output.
+  return { versionChecks: 2 }
+}
+
+function privateWorkspace(label) {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-conpty-' + label + '-'))
+  chmodSync(dir, 0o700)
+  childRoots.push(dir)
+  for (const name of ['home', 'appdata', 'localappdata', 'temp', 'config', 'cache',
+    'agents', 'dsh', 'sessions', 'workspace']) {
+    mkdirSync(join(dir, name), { recursive: true, mode: 0o700 })
+  }
+  return {
+    dir, profile: join(dir, 'dsh'), workspace: join(dir, 'workspace'),
+    sessions: join(dir, 'sessions'),
+  }
+}
+
+function isolatedEnv(sandbox) {
+  const preserve = [
+    'SystemRoot', 'WINDIR', 'ComSpec', 'PATH', 'PATHEXT',
+    'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'PROCESSOR_ARCHITECTURE',
+    'NUMBER_OF_PROCESSORS',
+  ]
+  const env = Object.fromEntries(preserve.flatMap(name =>
+    process.env[name] === undefined ? [] : [[name, process.env[name]]))
+  return {
+    ...env,
+    HOME: join(sandbox.dir, 'home'),
+    USERPROFILE: join(sandbox.dir, 'home'),
+    APPDATA: join(sandbox.dir, 'appdata'),
+    LOCALAPPDATA: join(sandbox.dir, 'localappdata'),
+    TMP: join(sandbox.dir, 'temp'),
+    TEMP: join(sandbox.dir, 'temp'),
+    XDG_CONFIG_HOME: join(sandbox.dir, 'config'),
+    XDG_CACHE_HOME: join(sandbox.dir, 'cache'),
+    DSH_HOME: sandbox.profile,
+    DSH_AGENTS_HOME: join(sandbox.dir, 'agents'),
+    DSH_TUI_TEST_STORE: sandbox.sessions,
+    DSH_TUI_TEST_WORKSPACE: sandbox.workspace,
+    DSH_TELEMETRY_DISABLED: '1',
+    TERN_TSP: '1',
+    TERM: 'xterm-256color',
+  }
+}
+
+function spawnConsole(command, argv, sandbox) {
+  return pty.spawn(command, argv, {
+    name: 'xterm-256color', cols: 100, rows: 28,
+    cwd: sandbox.workspace, env: isolatedEnv(sandbox),
+    useConpty: true, useConptyDll: false,
+  })
+}
+
+function cliArgs(extra = []) {
+  const config = join(root, 'tests', 'host', 'fixtures', 'cordis.yml')
+  return [join(host, 'apps', 'cli', 'lib', 'bin.js'), '--profile', 'tui',
+    '--patch', config, ...extra]
+}
+
+function installPlugin(sandbox) {
+  const launch = [join(host, 'apps', 'cli', 'lib', 'bin.js'),
+    'plugin', '--profile', 'tui', 'add', archive]
+  const result = spawnSync(process.execPath, launch, {
+    cwd: sandbox.workspace, env: isolatedEnv(sandbox),
+    encoding: 'utf8', timeout: 600_000, windowsHide: true,
+    maxBuffer: 1_000_000,
+  })
+  requireGate(!result.error && result.status === 0 && !result.signal,
+    'ordinary host dsh plugin --profile tui add tarball failed')
+  const manifest = JSON.parse(readFileSync(join(sandbox.profile, 'profiles', 'tui', 'package.json'), 'utf8'))
+  requireGate(!!manifest.dependencies?.[pluginName],
+    'real plugin manager did not install the packed external plugin')
+  requireGate(JSON.stringify(manifest.dsh?.profile?.bundles)
+    === JSON.stringify(['@deepseek-ai/dsh-base', pluginName]),
+  'host profile base+external-plugin layering differs')
+  const installed = JSON.parse(readFileSync(join(
+    sandbox.profile, 'profiles', 'tui', 'node_modules', '@kvnloo', 'dsh-tern', 'package.json'), 'utf8'))
+  requireGate(installed.name === pluginName && installed.dsh?.bundle?.patch === './cordis.patch.yml',
+    'host plugin-manager installation does not resolve the real bundle manifest')
+}
+
+async function preflight() {
+  const sandbox = privateWorkspace('preflight')
+  const child = spawnConsole(process.execPath, [
+    '-e',
+    'process.stdout.write("CONPTY_TTY=" + JSON.stringify({ p: process.platform, i: !!process.stdin.isTTY, o: !!process.stdout.isTTY }) + "\\n")',
+  ], sandbox)
+  const peer = new ConptyPeer(child, 'fallback')
+  try {
+    await peer.waitForExit(20_000)
+    requireGate(peer.exit.code === 0, 'native ConPTY preflight process failed')
+    requireGate(peer.output.includes('CONPTY_TTY={"p":"win32","i":true,"o":true}'),
+      'OS ConPTY did not attach real child stdin and stdout TTY')
+    return { exitCode: peer.exit.code, childTtyInput: true, childTtyOutput: true }
+  } finally { peer.dispose() }
+}
+
+function userContent(blocks) {
+  if (!Array.isArray(blocks)) return ''
+  return blocks.filter(block => block?.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text).join('')
+}
+
+function durable(sandbox) {
+  const paths = readdirSync(sandbox.sessions, { recursive: true })
+    .filter(file => /^session(?:\.v[1-9]\d*)?\.jsonl$/.test(basename(file)))
+  requireGate(paths.length > 0, 'real persisted Session JSONL was not created')
+  paths.sort((a, b) => {
+    const version = file => Number(basename(file).match(/^session\.v(\d+)\.jsonl$/)?.[1] ?? 0)
+    return version(b) - version(a)
+  })
+  const lines = readFileSync(join(sandbox.sessions, paths[0]), 'utf8').trim().split('\n')
+    .map(line => JSON.parse(line))
+  requireGate(lines[0]?.type === 'session' && typeof lines[0].id === 'string',
+    'physical Session header is missing')
+  const events = lines.slice(1)
+  const users = events.filter(item => item.type === 'user/message' && item.data?.source?.kind === 'user')
+    .map(item => userContent(item.data.content))
+  const assistants = events.filter(item => item.type === 'assistant/message')
+    .map(item => userContent(item.data?.message?.content)).filter(Boolean)
+  return { id: lines[0].id, events, users, assistants }
+}
+
+function assertExact(values, expected, phaseLabel) {
+  requireGate(JSON.stringify(values) === JSON.stringify(expected), phaseLabel + ': physical Session exact content mismatch')
+}
+
+function assertTool(log) {
+  const calls = log.events.filter(event => event.type === 'tool/call')
+  const results = log.events.filter(event => event.type === 'tool/result')
+  requireGate(calls.length === 1 && results.length === 1,
+    'real Agent must persist exactly one fixture tool call/result')
+  const call = calls[0]
+  requireGate(call.data?.name === 'tui_fixture_effect' && typeof call.data?.callId === 'string',
+    'real ToolService fixture call identity missing')
+  const result = results[0].data?.message
+  requireGate(result?.toolCallId === call.data.callId &&
+    userContent(result.content) === 'DSH_TUI_FIXTURE_OK',
+  'real fixture ToolService result did not match its durable call')
+  return call.data.callId
+}
+
+function launch(sandbox, extra = [], mode = 'native') {
+  const child = spawnConsole(process.execPath, cliArgs(extra), sandbox)
+  return new ConptyPeer(child, mode)
+}
+
+async function waitNative(peer) {
+  await peer.waitFor(() => peer.queryCount === 1 && peer.opens.some(o => o.id === 'dsh')
+    && peer.frames.some(f => f.sf === 'dsh'), 'real OSC877 hello + native semantic surface', 45_000)
+  peer.assertTransport()
+  requireGate(!peer.output.includes('dsh TUI (ANSI)'), 'unexpected silent ANSI fallback')
+}
+
+async function waitNode(peer, condition, name, after = 0, ms = 45_000) {
+  await peer.waitFor(() => peer.nodeMatches(condition, after), name, ms)
+}
+
+async function finishNative(peer) {
+  peer.write('/quit\r')
+  await peer.waitForExit(25_000)
+  peer.assertClosed()
+}
+
+async function nativeOne(sandbox) {
+  const peer = launch(sandbox)
+  try {
+    await waitNative(peer)
+    // Real TTY typing + cursor move + delete + Unicode + bracketed multiline
+    // paste, not a forged editor event.
+    peer.write('xyzQ')
+    peer.write('\x1b[D')
+    peer.write('\x1b[3~')
+    peer.write('😀')
+    peer.write('\x1b[200~\nsecond line\x1b[201~')
+    await waitNode(peer, {
+      id: 'dock.composer.line.input', text: 'xyz😀\nsecond line',
+    }, 'native Unicode paste and editing')
+    let before = peer.frames.length
+    peer.write('\r')
+    await waitNode(peer, { contains: 'echo: xyz' },
+      'real Agent first native reply', before)
+    before = peer.frames.length
+    peer.sendOsc877('e', {
+      ev: 'send', sf: 'dsh', id: 'dock.composer.line.input', text: 'atomic\nsend',
+    })
+    await waitNode(peer, { contains: 'echo: atomic' },
+      'OSC877 atomic native multiline send', before)
+    before = peer.frames.length
+    peer.sendOsc877('e', {
+      ev: 'send', sf: 'dsh', id: 'dock.composer.line.input', text: '[tool]',
+    })
+    await waitNode(peer, { contains: 'Tool result: DSH_TUI_FIXTURE_OK' },
+      'real ToolService execution and stable native card', before, 60_000)
+    const beforeQuit = durable(sandbox)
+    assertExact(beforeQuit.users, ['xyz😀\nsecond line', 'atomic\nsend', '[tool]'], 'native send-once')
+    assertExact(beforeQuit.assistants, [
+      'echo: xyz😀\nsecond line', 'echo: atomic\nsend', 'tool settled',
+    ], 'real Agent replies')
+    const callId = assertTool(beforeQuit)
+    const toolId = 'main.tool.' + callId
+    requireGate(peer.nodes.get(toolId)?.p?.role === 'dsh.tool',
+      'real native semantic tool card role missing')
+    requireGate(peer.nodes.get(toolId + '.body')?.p?.text
+      === 'Tool result: DSH_TUI_FIXTURE_OK',
+    'real native tool result card did not settle')
+    const additions = peer.frames.flatMap(frame => frame.ops)
+      .filter(op => Array.isArray(op) && op[0] === 'add' && op[4]?.id === toolId)
+    requireGate(additions.length === 1, 'tool card was re-added instead of reconciled once')
+    await finishNative(peer)
+    return {
+      sessionId: beforeQuit.id, durableUserCount: beforeQuit.users.length,
+      durableAssistantCount: beforeQuit.assistants.length,
+      durableToolResults: 1, transport: peer.stats(),
+    }
+  } finally { peer.dispose() }
+}
+
+async function nativeResume(sandbox, sessionId) {
+  const peer = launch(sandbox, ['--session-id', sessionId])
+  try {
+    await waitNative(peer)
+    await waitNode(peer, { contains: 'Tool result: DSH_TUI_FIXTURE_OK' },
+      'durable Session replay on new real ConPTY child')
+    // A pane is no longer visible, loses its original surface and then
+    // becomes visible; the real SDK opens the documented recovery surface.
+    peer.sendOsc877('e', { ev: 'visible', sf: 'dsh', visible: false })
+    peer.sendOsc877('e', { ev: 'gone', sf: 'dsh', ids: ['dsh'] })
+    peer.sendOsc877('e', { ev: 'visible', sf: 'dsh', visible: true })
+    await peer.waitFor(() => peer.opens.some(o => o.id === 'dsh.recovery.1')
+      && peer.frames.some(f => f.sf === 'dsh.recovery.1'),
+    'actual ConPTY detach/reattach surface lifecycle', 45_000)
+    const before = peer.frames.length
+    peer.write('after-resume\r')
+    await waitNode(peer, { contains: 'echo: after-resume' },
+      'Agent reply after recovered native surface', before)
+    const saved = durable(sandbox)
+    requireGate(saved.id === sessionId, 'real persisted Session ID changed across process restart')
+    assertExact(saved.users, ['xyz😀\nsecond line', 'atomic\nsend', '[tool]', 'after-resume'],
+      'native multi-turn resume')
+    assertExact(saved.assistants, [
+      'echo: xyz😀\nsecond line', 'echo: atomic\nsend', 'tool settled', 'echo: after-resume',
+    ], 'native durable assistant replay')
+    await finishNative(peer)
+    return {
+      resumedSameSession: true, durableUserCount: saved.users.length,
+      durableAssistantCount: saved.assistants.length, transport: peer.stats(),
+    }
+  } finally { peer.dispose() }
+}
+
+async function fallbackMalicious(sandbox) {
+  const peer = launch(sandbox, [], 'fallback')
+  try {
+    await peer.waitFor(() => peer.output.includes('dsh> '),
+      'DA1-first real ANSI fallback prompt', 45_000)
+    requireGate(peer.queryCount === 1 && peer.frames.length === 0,
+      'DA1-first did not suppress native surface')
+    peer.write('preé')
+    // The invalid, foreign and late replies below go through real ConPTY
+    // handles, not direct SDK parser calls or render-generated bytes.
+    peer.sendOsc877('r', {
+      r: 'hello', v: 99, term: 'tern', ver: '0.1.0',
+      kinds: ['text'], features: ['send'], apc: 4096, credits: 2,
+    })
+    peer.write('\x1b_tsp;r;{"r":"hello","v":1,"term":"foreign"}\x1b\\')
+    peer.sendOsc877('e', '{broken-json}')
+    peer.write('\x1b_foreign;not-a-user-intent\x1b\\')
+    peer.write('-mid🌱post\r')
+    await peer.waitFor(() => peer.output.includes('[dsh] echo: preé-mid🌱post'),
+      'malformed / foreign / late hello fenced from ANSI Agent', 45_000)
+    peer.write('/quit\r')
+    await peer.waitForExit(25_000)
+    requireGate(peer.exit.code === 0, 'ANSI fallback /quit exit not zero')
+    requireGate(peer.frames.length === 0, 'malformed hello promoted to a native frame')
+    const saved = durable(sandbox)
+    assertExact(saved.users, ['preé-mid🌱post'], 'late hello never becomes a user request')
+    assertExact(saved.assistants, ['echo: preé-mid🌱post'], 'fallback real Agent reply')
+    peer.assertTransport(false)
+    return {
+      durableUserCount: 1, durableAssistantCount: 1,
+      maliciousCarriers: 4, transport: peer.stats(),
+    }
+  } finally { peer.dispose() }
+}
+
+async function disabledNative(sandbox) {
+  const peer = launch(sandbox, ['--no-native'], 'fallback')
+  try {
+    await peer.waitFor(() => peer.output.includes('dsh> '),
+      'explicitly disabled native real ANSI prompt', 30_000)
+    requireGate(peer.queryCount === 0 && peer.frames.length === 0,
+      'native opt-out still probed or rendered TSP')
+    peer.write('disabled\r')
+    await peer.waitFor(() => peer.output.includes('[dsh] echo: disabled'),
+      'opt-out real Agent reply', 45_000)
+    peer.write('/quit\r')
+    await peer.waitForExit(25_000)
+    requireGate(peer.exit.code === 0, 'opt-out /quit exit not zero')
+    assertExact(durable(sandbox).users, ['disabled'], 'native opt-out Session')
+    return { durableUserCount: 1, transport: peer.stats() }
+  } finally { peer.dispose() }
+}
+
+function safeFailure(error) {
+  if (error instanceof GateFailure) return error.message
+  const code = typeof error?.code === 'string' ? error.code : 'unclassified'
+  return 'unexpected ' + (error?.name ?? 'Error') + ' (' + code + '); private details withheld'
+}
+
+try {
+  await step('inputs-and-native-backend', backendCheck)
+  await step('os-conpty-tty-preflight', preflight)
+  const main = privateWorkspace('native')
+  await step('packed-real-plugin-manager-native-profile', () => {
+    installPlugin(main)
+    return { installedThroughRealHost: true }
+  })
+  const first = await step('native-unicode-multiline-edit-atomic-send-tool-close',
+    () => nativeOne(main))
+  await step('native-persistent-session-restart-and-surface-recovery',
+    () => nativeResume(main, first.sessionId))
+  const fallback = privateWorkspace('fenced')
+  await step('packed-real-plugin-manager-fallback-profile', () => {
+    installPlugin(fallback)
+    return { installedThroughRealHost: true }
+  })
+  await step('da1-first-late-foreign-malformed-hello', () => fallbackMalicious(fallback))
+  const disabled = privateWorkspace('disabled')
+  await step('packed-real-plugin-manager-optout-profile', () => {
+    installPlugin(disabled)
+    return { installedThroughRealHost: true }
+  })
+  await step('explicit-no-native-ansi-real-agent', () => disabledNative(disabled))
+  evidence.status = 'GREEN'
+  evidence.phase = 'complete'
+} catch (error) {
+  evidence.status = 'RED'
+  evidence.phase = phase
+  evidence.failure = safeFailure(error)
+  cases.push({ name: phase, status: 'RED', reason: evidence.failure })
+} finally {
+  // Only synthetic receipt metadata may escape the private workspace.
+  // Never upload raw PTY streams, Session logs, profiles or HOME.
+  const destination = join(out, 'summary.json')
+  writeFileSync(destination, JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600 })
+  for (const dir of childRoots) rmSync(dir, { recursive: true, force: true })
+}
+process.stdout.write('Windows ConPTY gate ' + evidence.status + ' at phase ' + evidence.phase
+  + '; cases=' + cases.filter(item => item.status === 'PASS').length + ' PASS, '
+  + cases.filter(item => item.status === 'RED').length + ' RED\n')
+if (evidence.status === 'RED') {
+  process.stderr.write('Windows ConPTY RED ' + evidence.phase + ': ' + evidence.failure + '\n')
+  process.exitCode = 1
+}
