@@ -51,14 +51,13 @@ class Output implements TermOutput {
     return value
   }
 
-  actionId(label: string): string | undefined {
+  answerId(): string | undefined {
     const visit = (value: unknown): string | undefined => {
       if (value === null || typeof value !== 'object') return
       const candidate = value as Record<string, unknown>
-      const props = candidate['p']
-      if (typeof candidate['id'] === 'string'
-        && props !== null && typeof props === 'object'
-        && 'text' in props && props.text === label) return candidate['id']
+      const id = candidate['id']
+      if (typeof id === 'string' && id.startsWith('layer.')
+        && (candidate['k'] === 'editor' || candidate['k'] === 'input')) return id
       const children = candidate['c']
       if (Array.isArray(children)) {
         for (const child of children) {
@@ -103,6 +102,7 @@ async function fixture(support: readonly string[] = hello.kinds) {
   const output = new Output()
   const pending = connect({
     app: 'dsh', input, output, env: {}, timeout: 200,
+    features: ['edit', 'undo', 'send'],
     exitHooks: false, record: '', bracketedPaste: true, kittyKeyboard: true,
   })
   input.push(encodeMessage('r', JSON.stringify({ ...hello, kinds: support })))
@@ -252,36 +252,36 @@ describe('native TUI real 0.1.0 SDK / PTY / composer', () => {
     }
   })
 
-  it('ignores an old visible approval action after a replacement is rendered', async () => {
+  it('ignores an old visible approval send after a replacement is rendered', async () => {
     const f = await fixture(['col', 'row', 'text', 'card', 'md', 'editor', 'input'])
     const controller = new AbortController()
     try {
       const old = f.terminal.ask({
         title: 'First approval', signal: controller.signal,
-        choices: [{ label: 'Allow first', value: 'first' }],
+        choices: [{ label: 'Allow first', value: 'allowed-once' }],
       })
-      const oldId = f.output.actionId('1) Allow first')
-      if (!oldId) throw new Error('First approval action missing from emitted document')
+      const oldId = f.output.answerId()
+      if (!oldId) throw new Error('First approval editor missing from emitted document')
       controller.abort()
       expect(await old).toBeNull()
 
       const fresh = f.terminal.ask({
         title: 'Replacement approval',
-        choices: [{ label: 'Allow second', value: 'second' }],
+        choices: [{ label: 'Allow second', value: 'allowed-once' }],
       })
-      const freshId = f.output.actionId('1) Allow second')
-      if (!freshId) throw new Error('Replacement approval action missing from emitted document')
+      const freshId = f.output.answerId()
+      if (!freshId) throw new Error('Replacement approval editor missing from emitted document')
       let answered = false
       void fresh.then(() => { answered = true })
 
-      f.event({ ev: 'action', sf: 'dsh', id: oldId, act: 'click' })
+      f.event({ ev: 'send', sf: 'dsh', id: oldId, text: 'allowed-once' })
       const drained = Promise.withResolvers<void>()
       setImmediate(drained.resolve)
       await drained.promise
       expect(answered).toBe(false)
 
-      f.event({ ev: 'action', sf: 'dsh', id: freshId, act: 'click' })
-      expect(await fresh).toBe('second')
+      f.event({ ev: 'send', sf: 'dsh', id: freshId, text: 'allowed-once' })
+      expect(await fresh).toBe('allowed-once')
     } finally {
       await f.close()
     }
