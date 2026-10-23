@@ -3,7 +3,9 @@ name: standalone DSH Tern qualification
 on:
   workflow_dispatch:
   push:
-    branches: ['**']
+    # Keep registration of the bounded Windows benchmark from launching a
+    # second, unrelated Linux qualification job at the same time.
+    branches-ignore: ['ci/avrea-conpty-factory-20261023']
   pull_request:
 
 permissions:
