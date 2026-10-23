@@ -50,6 +50,8 @@ export class NativeTerminal implements Terminal {
   private stopped = false
   private readonly gone = new Set<string>()
   private readonly settled = new Set<string>()
+  private visible = true
+  private pendingRecovery = false
   private revision = 0
   private recorder: TspRecorder | undefined
 
@@ -65,6 +67,17 @@ export class NativeTerminal implements Terminal {
     return this.session.open({
       id: this.surfaceId(), mode: 'inline', role: 'dsh.session', title: 'DeepSeek Harness',
     })
+  }
+
+  /** Surface lifetime is presentation-only: never reissue Agent intents on reconnect. */
+  private recover(): void {
+    this.pendingRecovery = false
+    this.epoch += 1
+    if (this.epoch > 3) throw new Error('Tern surface recovery limit reached')
+    this.gone.clear()
+    this.settled.clear()
+    this.surface = this.openSurface()
+    this.render()
   }
 
   async start(submit: (text: string) => void, interrupt: () => void, quit: (error?: Error) => void): Promise<void> {
@@ -85,12 +98,8 @@ export class NativeTerminal implements Terminal {
           if (input.type === 'key') this.key(input.key)
           else if (input.event.ev === 'gone') {
             if (input.event.ids.includes(this.surfaceId())) {
-              this.epoch += 1
-              if (this.epoch > 3) throw new Error('Tern surface recovery limit reached')
-              this.gone.clear()
-              this.settled.clear()
-              this.surface = this.openSurface()
-              this.render()
+              if (this.visible) this.recover()
+              else this.pendingRecovery = true
             } else {
               for (const id of input.event.ids) {
                 if (this.settled.has(id)) {
@@ -98,11 +107,23 @@ export class NativeTerminal implements Terminal {
                   this.settled.delete(id)
                 }
               }
+              if (this.visible) this.render()
             }
-          } else if (input.event.ev === 'resize' || input.event.ev === 'theme'
-            || input.event.ev === 'motion' || (input.event.ev === 'visible' && input.event.visible)) {
-            // The SDK already updates negotiated caps; rebuild from shared state.
-            this.render()
+          } else if (input.event.ev === 'visible'
+            && (!input.event.sf || input.event.sf === this.surfaceId())) {
+            this.visible = input.event.visible
+            if (this.visible) {
+              if (this.pendingRecovery) this.recover()
+              else this.render()
+            }
+          } else if (input.event.ev === 'resize') {
+            if (typeof input.event.visible === 'boolean') this.visible = input.event.visible
+            if (this.visible) {
+              if (this.pendingRecovery) this.recover()
+              else this.render()
+            }
+          } else if (input.event.ev === 'theme' || input.event.ev === 'motion') {
+            if (this.visible) this.render()
           } else if (input.event.ev === 'error'
             && (!input.event.sf || input.event.sf === this.surfaceId())) {
             throw new Error('Tern rejected a surface operation: ' + input.event.msg)
@@ -188,7 +209,7 @@ export class NativeTerminal implements Terminal {
 
   private render(): void {
     const snapshot = this.last
-    if (!snapshot || this.stopped || this.surface.closed) return
+    if (!snapshot || this.stopped || !this.visible || this.surface.closed) return
     const main = snapshot.entries.filter(e => !this.gone.has('main.' + e.id))
       .map(e => this.renderEntry(e))
     if (snapshot.live && !snapshot.entries.some(e => e.id === snapshot.liveId)) {
