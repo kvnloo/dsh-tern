@@ -203,3 +203,108 @@ Any remaining product RED needs its actual Agent/Session log, decoded
 complete TSP frames and exact src file:line reported to the separate
 production owner. No production TUI, Agent, SDK, lockfile, keyless or
 Cordis registration edits are authorized in this fixture slice.
+
+## TRN10 native semantics: REQUIRED real-Tern pointer witness (UNRUN)
+
+The prior SDK-only `ev:action` fixture proved action dispatch, not pointer hit
+testing: in the built Tern 0.9.5 window, a visible question button occupied
+[18,98,1244,16], but `tern ctl pick 640 106` hit the underlying transcript.
+Acceptance requires the **actual** control server to pick the current overlay
+button and create an inbound TSP `e/action` from a **real pointer click**.
+
+Use a **new** 0700 evidence workspace, isolated private Sway/headless Tern
+server and actual shipped CLI. Reuse the environment, cleanup trap and
+launch sequence in `private_tern.sh` (lines 23-151) as the setup for a
+one-off private pointer scenario, **stopping before that script's automatic
+alpha/error/quit sequence**. Do not attach to the user's Tern, desktop,
+pane, provider account, SSH keys or multiplexer. Pin and record
+`tern --version`, the Tern executable SHA256, the DSH commit SHA, SDK
+frames and real persisted Session JSONL. Unlike the generic live sample,
+the approval scenario additionally needs the fixture's private
+`DSH_TUI_TEST_WORKSPACE` directory: create it mode 0700 within `BASE`
+and add its absolute path to the private `SAFE_ENV` **before** launching
+`tern serve` and `dsh`. The keyless fixture's approval barrier intentionally
+waits for `approval-release.barrier`; only the test owner may create that
+file, after the intended unsent draft has been typed.
+
+Using that script's `ctl <label> <tern ctl arguments...>` helper and its
+`CONTROL` endpoint, run two fresh live cases, **not** `surface-play`:
+
+1. Question: `ctl question type '[question-choice]'`,
+   `ctl question-send key Enter`. When the real question opens, capture
+   `ctl question-tree tree "[data-role='dsh.question.choice']"` and
+   `ctl question-dump dump "[data-role='dsh.question.choice']"`.
+   Extract the fresh Beta button's `[data-id]` and geometry from that
+   particular tree/dump; never reuse a historical `layer.request.*` id
+   or hard-coded coordinates. Check that a native
+   `[data-role='dsh.question']` **overlay** with modal backdrop contains it,
+   and the dock composer has `sendable=false`. Choose a point inside the
+   actual button rectangle, `ctl question-hit pick X Y`, and require the
+   topmost result to be the **same button**, not `sf-main`, `sf-dock`,
+   an overlay backdrop or the transcript. Then `ctl question-click click X Y`.
+   Require an inbound `e/action` with that exact new choice id and
+   `act=click` in the private full SDK record, the actual public
+   `ask_user_question` result `answers:[{id:'choice',selected:['Beta']}]`
+   in the persisted Session, and removal of the question overlay.
+2. Approval allow: in an independent private workspace, send
+   `[approval-allow]`, wait for the real `approval-waiting.barrier`,
+   edit an **unsent** Unicode/multiline draft with a midline caret through
+   real PTY keys, and atomically create `approval-release.barrier` as
+   done by `public-services.e2e.ts`. Once the real ApprovalService dialog
+   appears, repeat the fresh tree/dump/geometry/`pick`/`click` procedure
+   above for its **Allow once** button. Require an SDK inbound pointer
+   `e/action`, one durable `approval/asked` paired with
+   `approval/decided:allowed-once`, and a single exclusively created
+   `approval-allowed.marker` containing `allowed-once`. The ordinary
+   composer must remain `sendable=false` until the modal closes and
+   restore the **exact** Unicode draft and caret before one actual send.
+   A new clean case must click **Deny**, require a durable rejected
+   decision and **no marker**, with no new Agent user turn from the
+   approval action.
+
+For every click capture `state`, `tree`, `dump`, `pick`, `shot`,
+private `DSH_TSP_RECORD_FULL`, metadata recorder output and persisted
+Session events **before and after**. A direct injected `ev:action` is an
+additional dispatcher regression only; it is **not** a substitute for
+the `pick` + physical `tern ctl click` test. Fail if the fresh pick
+returns `sf-main` or `sf-dock`, if no inbound action arrives, if the
+actual approval/question remains pending, if the wrong identity answers,
+if any host effect occurs in Deny, or if the draft/caret changes.
+
+Also exercise completed real `[tool]` in Tern with negotiated `tool`:
+the same call ID must remain a single `.sf-tool` with a named head,
+transition `running` to `done`, and keep a user-toggled collapsed state
+across redraw/reattach. No empty assistant card for a call-only message.
+Use the real public-service PTY and persisted JSONL oracles for result
+content and replay, never inferred model/tool output.
+
+**Run order for OMP, all at this exact PR head** (no pass is claimed here):
+
+~~~sh
+git rev-parse HEAD
+corepack pnpm install --frozen-lockfile --prefer-offline
+corepack pnpm exec vitest run \
+  packages/bundle/tui-app/tests/native-semantics.spec.ts \
+  packages/bundle/tui-app/tests/native.spec.ts \
+  packages/bundle/tui-app/tests/native-fallback.spec.ts \
+  packages/bundle/tui-app/tests/native-regressions.spec.ts \
+  packages/bundle/tui-app/tests/native-pty.spec.ts \
+  packages/bundle/tui-app/tests/model.spec.ts \
+  packages/bundle/tui-app/tests/ansi.spec.ts
+corepack pnpm exec vitest run packages/bundle/tui-app/tests/retention.spec.ts \
+  packages/bundle/tui-app/tests/transport-conformance.spec.ts
+python3 -m py_compile apps/cli/tests/profiles/tui/harness/*.py
+corepack pnpm exec vitest run --config vitest.e2e.config.ts \
+  apps/cli/tests/profiles/tui/tests/keyless.e2e.ts \
+  apps/cli/tests/profiles/tui/tests/public-services.e2e.ts
+DSH_EXAMPLE_MODE=lib corepack pnpm exec vitest run --config vitest.e2e.config.ts \
+  apps/cli/tests/profiles/tui/tests/keyless.e2e.ts \
+  apps/cli/tests/profiles/tui/tests/public-services.e2e.ts
+~~~
+
+Only **heavy MBP host build/typecheck/hygiene gates** take the fleet build
+flock: `corepack pnpm run build:lib:host`,
+`corepack pnpm run typecheck`, `corepack pnpm run hygiene`,
+`corepack pnpm run doc-sync` and packed-SDK checks as directed by the
+lead. **Native PTY smokes and real-Tern pointer runs MUST run outside the
+MBP build flock**, in their own private runtimes; no live provider keys.
