@@ -213,7 +213,10 @@ async function run(ctx: Context, config: Config): Promise<void> {
       return { answers }
     }, { global: true }))
 
-    await display.start(submit, interrupt, () => done.resolve())
+    await display.start(submit, interrupt, error => {
+      if (error) done.reject(error)
+      else done.resolve()
+    })
     show()
     await done.promise
   } catch (error) {
