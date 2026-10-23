@@ -178,16 +178,18 @@ describe('durable semantic tool presentation', () => {
 
   it('preserves errors, cancellations, whitespace text, interrupted partials and diagnostics', () => {
     const t = new Transcript('exceptional')
+    const history: SessionEvent[] = []
+    const admit = (entry: SessionEvent): void => { history.push(entry); t.accept(entry) }
     const id = ToolCallId('failed')
-    t.accept(event(0, 'tool/call', { turn: 1, step: 1, callId: id, name: 'browse', arguments: '{}' }))
-    t.accept(event(1, 'tool/result', {
+    admit(event(0, 'tool/call', { turn: 1, step: 1, callId: id, name: 'browse', arguments: '{}' }))
+    admit(event(1, 'tool/result', {
       turn: 1, step: 1,
       message: createToolResultMessage({ callId: id, isError: true, content: [{ type: 'text', text: 'Denied' }] }),
     }))
     expect(t.snapshot().entries[0]).toMatchObject({ kind: 'error', tool: { name: 'browse', status: 'error' } })
     const abandoned = ToolCallId('abandoned')
-    t.accept(event(2, 'tool/call', { turn: 2, step: 1, callId: abandoned, name: 'bash', arguments: '{}' }))
-    t.accept(event(3, 'turn/end', { turn: 2, reason: { kind: 'aborted', reason: { kind: 'user' } } }))
+    admit(event(2, 'tool/call', { turn: 2, step: 1, callId: abandoned, name: 'bash', arguments: '{}' }))
+    admit(event(3, 'turn/end', { turn: 2, reason: { kind: 'aborted', reason: { kind: 'user' } } }))
     expect(t.snapshot().entries[1]).toMatchObject({
       id: 'tool.abandoned', kind: 'error', text: 'Interrupted bash',
       tool: { name: 'bash', status: 'cancelled' },
@@ -198,16 +200,23 @@ describe('durable semantic tool presentation', () => {
         message: createAssistantMessage({ source: { provider: 'fixture', model: 'fixed' }, content }),
         stream: [],
       })
-    t.accept(message([
+    admit(message([
       { type: 'text', text: ' \t ' },
       { type: 'tool-call', id: ToolCallId('unused'), name: 'bash', arguments: '{}' },
     ]))
-    t.accept(message([
+    admit(message([
       { type: 'tool-call', id: ToolCallId('still-visible'), name: 'bash', arguments: '{}' },
     ], true))
     expect(t.snapshot().entries.slice(2).map(row => row.text)).toEqual([
       ' \t ', 'Interrupted response\n',
     ])
+    const durable = { seq: history.length, eventAt: (seq: SessionSeq) => history[seq] }
+      as Parameters<Transcript['replay']>[0]
+    const resumed = new Transcript('exceptional')
+    resumed.replay(durable)
+    expect(resumed.snapshot().entries).toEqual(t.snapshot().entries)
+    resumed.replay(durable)
+    expect(resumed.snapshot().entries).toHaveLength(4)
   })
 
   it('uses a stable native tool node with a semantic head and terminal-owned fold', async () => {
