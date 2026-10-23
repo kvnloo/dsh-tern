@@ -551,7 +551,7 @@ describe('RFC #6 synthetic evidence seal safety (NOT native proof)', () => {
   it('keeps private launcher shell parseable without executing Sway or a provider', () => {
     const source = readFileSync(join(harness, 'private_tern.sh'), 'utf8')
     expect(source).toContain('DSH_TUI_TEST_WORKSPACE=$WORKSPACE')
-    expect(source).toContain('scenario_quote "$BASE/launch-dsh.sh"')
+    expect(source).toContain('run_quote "$BASE/launch-dsh.sh"')
     expect(source).toContain('replay_ready()')
     const parse = spawnSync('bash', ['-n', join(harness, 'private_tern.sh')], {
       encoding: 'utf8', timeout: 10_000,
