@@ -134,6 +134,20 @@ describe('native-profile RED behavioral witnesses against the real SDK decoder',
     await f.term.closed()
   })
 
+  it('does not recreate a detached hidden surface until it becomes visible again', async () => {
+    const f = terminalFixture()
+    await f.term.start(() => {}, () => {}, () => {})
+    f.term.update(empty)
+    f.push({ type: 'event', event: { ev: 'visible', sf: 'dsh', visible: false, raw: {} } })
+    f.push({ type: 'event', event: { ev: 'gone', sf: 'dsh', ids: ['dsh'], raw: {} } })
+    await f.drain()
+    expect(f.surfaces).toHaveLength(1)
+    f.push({ type: 'event', event: { ev: 'visible', sf: 'dsh', visible: true, raw: {} } })
+    await f.drain()
+    expect(f.surfaces).toHaveLength(2)
+    await f.term.closed()
+  })
+
   it('reports native protocol failures to the owning lifecycle instead of silently exiting zero', async () => {
     const f = terminalFixture()
     let failure: Error | undefined
