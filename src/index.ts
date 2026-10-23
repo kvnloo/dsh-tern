@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { installModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import { installModelSelection, type AgentHandle, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq, type Session, type SessionEvent, type SessionId } from '@deepseek-ai/dsh-session'
 import { SessionQueryError } from '@deepseek-ai/dsh-session-query'
@@ -67,17 +67,25 @@ function* readEvents(session: Session): Generator<SessionEvent> {
   }
 }
 
-/** One interactive invocation. Terminal callbacks only send through Agent APIs. */
+/** One interactive invocation, including startup and failure teardown. */
 async function run(ctx: Context, config: Config): Promise<void> {
   await ctx.get('loader')?.await()
   const sessions = ctx.get('sessions')
-  if (!sessions || !ctx.get('agents') || !ctx.get('agentDefaultModel')) return
+  const agents = ctx.get('agents')
+  const model = ctx.get('agentDefaultModel')
+  if (!sessions || !agents || !model) throw new Error('TUI requires sessions, agents and agentDefaultModel')
   const id = brandString<SessionId>(config.sessionId ?? 'session-' + randomUUID())
-  // The startup provider is injected through the patch. A direct test of the
-  // runner can still supply config without re-parsing the launcher's args.
-  const agent = await (async () => {
-    const model = ctx.get('agentDefaultModel')
-    const selection = model!.currentSelection()
+  let handle: AgentHandle | undefined
+  let terminal: Terminal | undefined
+  let connected: Awaited<ReturnType<typeof connectTern>> = null
+  let stopping = false
+  let failed: unknown
+  const release: Array<() => void> = []
+  const done = Promise.withResolvers<void>()
+  let lastInterrupt = 0
+
+  try {
+    const selection = model.currentSelection()
     const agentOptions = { provider: selection.provider, model: selection.model }
     const setup = (agentCtx: Context): void => {
       installModelSelection(agentCtx, { current: selection, assembled: undefined } satisfies ModelSelectionRef)
@@ -85,135 +93,150 @@ async function run(ctx: Context, config: Config): Promise<void> {
     const fs = ctx.get('fs')
     const cwd = fs === undefined ? process.cwd() : fs.processPath(await fs.resolve('.'))
     if (!config.sessionId) {
-      return (await ctx.get('agents')!.create({ sessionId: id, meta: { cwd }, agentOptions, setup })).agent
-    }
-    if (!ctx.get('sessionPersistence')) throw new Error('resuming requires sessionPersistence')
-    const query = ctx.get('sessionQuery')
-    if (!query) throw new Error('resuming requires sessionQuery')
-    if (ctx.get('agents')!.get(id)) throw new Error('session ' + id + ' is already active')
-    try {
-      using observed = await query.observeSession(id)
-      assertRootSession(observed.header, observed.events, id, cwd)
-      const { agent } = await ctx.get('agents')!.resume({ resumeSessionId: id, agentOptions, setup })
-      assertRootSession(agent.session.header, readEvents(agent.session), id, cwd)
-      return agent
-    } catch (error) {
-      if (error instanceof SessionQueryError && error.code === 'SESSION_QUERY_SESSION_NOT_FOUND') {
-        throw new Error('session ' + id + ' does not exist')
+      handle = await agents.create({ sessionId: id, meta: { cwd }, agentOptions, setup })
+    } else {
+      if (!ctx.get('sessionPersistence')) throw new Error('resuming requires sessionPersistence')
+      const query = ctx.get('sessionQuery')
+      if (!query) throw new Error('resuming requires sessionQuery')
+      if (agents.get(id)) throw new Error('session ' + id + ' is already active')
+      try {
+        using observed = await query.observeSession(id)
+        assertRootSession(observed.header, observed.events, id, cwd)
+        handle = await agents.resume({ resumeSessionId: id, agentOptions, setup })
+        assertRootSession(handle.agent.session.header, readEvents(handle.agent.session), id, cwd)
+      } catch (error) {
+        if (error instanceof SessionQueryError && error.code === 'SESSION_QUERY_SESSION_NOT_FOUND') {
+          throw new Error('session ' + id + ' does not exist')
+        }
+        throw error
       }
-      throw error
     }
-  })()
-  const transcript = new Transcript(id)
-  transcript.replay(agent.session)
-  transcript.status(agent.status)
+    const agent = handle.agent
+    const transcript = new Transcript(id)
+    transcript.replay(agent.session)
+    transcript.status(agent.status)
 
-  const connected = config.native === false ? null : await connectTern()
-  const terminal: Terminal = connected
-    ? new NativeTerminal(connected.sdk, connected.session)
-    : new AnsiTerminal()
+    const stopOnSignal = (): void => {
+      if (agent.status === 'running') agent.cancel({ kind: 'user' })
+      done.resolve()
+    }
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+      process.on(signal, stopOnSignal)
+      release.push(() => { process.off(signal, stopOnSignal) })
+    }
 
-  const done = Promise.withResolvers<void>()
-  let stopping = false
-  let lastInterrupt = 0
-  const show = (): void => terminal.update(transcript.snapshot())
-  const interrupt = (): void => {
-    if (agent.status === 'running') {
-      agent.cancel({ kind: 'user' })
-      return
+    connected = config.native === false ? null : await connectTern()
+    terminal = connected
+      ? new NativeTerminal(connected.sdk, connected.session)
+      : new AnsiTerminal()
+    const display = terminal
+    const show = (): void => display.update(transcript.snapshot())
+    const interrupt = (): void => {
+      if (agent.status === 'running') {
+        agent.cancel({ kind: 'user' })
+        return
+      }
+      if (Date.now() - lastInterrupt < 1500) done.resolve()
+      else lastInterrupt = Date.now()
     }
-    if (Date.now() - lastInterrupt < 1500) done.resolve()
-    else lastInterrupt = Date.now()
-  }
-  const submit = (raw: string): void => {
-    if (stopping) return
-    const text = raw.trim()
-    if (!text) return
-    if (text === '/quit' || text === '/exit') return done.resolve()
-    if (text === '/stop') return interrupt()
-    if (text === '/session') {
-      transcript.notice('Session: ' + id)
-      return show()
+    const submit = (raw: string): void => {
+      if (stopping) return
+      const text = raw.trim()
+      if (!text) return
+      if (text === '/quit' || text === '/exit') return done.resolve()
+      if (text === '/stop') return interrupt()
+      if (text === '/session') {
+        transcript.notice('Session: ' + id)
+        return show()
+      }
+      if (text === '/help') {
+        transcript.notice('/help · /session · /stop · /steer <text> · /quit')
+        return show()
+      }
+      const steer = text.startsWith('/steer ')
+      if (steer && !text.slice(7).trim()) return
+      const message = createUserMessage({
+        content: [{ type: 'text', text: steer ? text.slice(7) : raw }],
+        source: { kind: 'user' },
+      })
+      if (steer) agent.steer(message)
+      else agent.followup(message)
+      show()
     }
-    if (text === '/help') {
-      transcript.notice('/help · /session · /stop · /steer <text> · /quit')
-      return show()
-    }
-    const steer = text.startsWith('/steer ')
-    if (steer && !text.slice(7).trim()) return
-    const message = createUserMessage({
-      content: [{ type: 'text', text: steer ? text.slice(7) : raw }],
-      source: { kind: 'user' },
-    })
-    if (steer) agent.steer(message)
-    else agent.followup(message)
-    show()
-  }
 
-  // Watchers are owner-local. The live stream is a view hint only; the durable
-  // append is the only event that becomes a transcript row.
-  const offSession = ctx.on('session/event', (session, event) => {
-    if (session !== agent.session) return
-    transcript.accept(event)
-    show()
-  }, { global: true })
-  const offStream = ctx.on('agent/assistant-stream', ({ agent: subject, frame }) => {
-    if (subject !== agent) return
-    transcript.stream(frame)
-    show()
-  }, { global: true })
-  const offStatus = ctx.on('agent/status', ({ agent: subject, status }) => {
-    if (subject !== agent) return
-    transcript.status(status)
-    show()
-  }, { global: true })
-  const offApproval = ctx.on('approval/request', async (request, next) => {
-    if (request.agent !== agent) return next()
-    const answer = await terminal.ask({
-      title: 'Allow once: ' + request.toolName + '?',
-      detail: request.displayReason?.en ?? request.reason,
-      choices: [
-        { label: 'Allow once', value: 'allowed-once' },
-        { label: 'Deny', value: 'rejected' },
-      ],
-      signal: request.signal,
-    })
-    return answer === 'allowed-once' ? 'allowed-once' : request.signal?.aborted ? 'cancelled' : 'rejected'
-  }, { global: true })
-  const offQuestions = ctx.on('user-questions/request', async (request, next) => {
-    if (request.agent !== agent) return next()
-    const answers = []
-    for (const question of request.questions) {
-      const choices = question.multiSelect ? undefined : question.options?.map(option => ({
-        label: option.label, value: option.label,
-      }))
-      const answer = await terminal.ask({
-        title: question.header ? question.header + ': ' + question.question : question.question,
-        detail: question.detail,
-        choices,
+    release.push(ctx.on('session/event', (session, event) => {
+      if (session !== agent.session) return
+      transcript.accept(event)
+      show()
+    }, { global: true }))
+    release.push(ctx.on('agent/assistant-stream', ({ agent: subject, frame }) => {
+      if (subject !== agent) return
+      transcript.stream(frame)
+      show()
+    }, { global: true }))
+    release.push(ctx.on('agent/status', ({ agent: subject, status }) => {
+      if (subject !== agent) return
+      transcript.status(status)
+      show()
+    }, { global: true }))
+    release.push(ctx.on('approval/request', async (request, next) => {
+      if (request.agent !== agent) return next()
+      const answer = await display.ask({
+        title: 'Allow once: ' + request.toolName + '?',
+        detail: request.displayReason?.en ?? request.reason,
+        choices: [
+          { label: 'Allow once', value: 'allowed-once' },
+          { label: 'Deny', value: 'rejected' },
+        ],
         signal: request.signal,
       })
-      if (answer === null) throw new Error('user question was cancelled')
-      answers.push(answerItem(question, answer))
-    }
-    return { answers }
-  }, { global: true })
+      return answer === 'allowed-once' ? 'allowed-once' : request.signal?.aborted ? 'cancelled' : 'rejected'
+    }, { global: true }))
+    release.push(ctx.on('user-questions/request', async (request, next) => {
+      if (request.agent !== agent) return next()
+      const answers = []
+      for (const question of request.questions) {
+        const answer = await display.ask({
+          title: question.header ? question.header + ': ' + question.question : question.question,
+          detail: question.detail,
+          choices: question.options?.map(option => ({
+            label: option.label + (option.description ? ' — ' + option.description : ''),
+            value: option.label,
+          })),
+          multiple: question.multiSelect,
+          signal: request.signal,
+        })
+        if (answer === null) throw new Error('user question was cancelled')
+        answers.push(answerItem(question, answer))
+      }
+      return { answers }
+    }, { global: true }))
 
-  try {
-    await terminal.start(submit, interrupt, () => done.resolve())
+    await display.start(submit, interrupt, () => done.resolve())
     show()
     await done.promise
+  } catch (error) {
+    failed = error
+    throw error
   } finally {
     stopping = true
-    offQuestions()
-    offApproval()
-    offStatus()
-    offStream()
-    offSession()
-    if (agent.status === 'running') agent.cancel({ kind: 'disposed' })
-    await terminal.closed()
-    await agent.whenIdle()
-    await sessions.flush(agent.session)
+    const cleanupErrors: unknown[] = []
+    const cleanup = async (action: () => void | Promise<void>): Promise<void> => {
+      try { await action() } catch (error) { cleanupErrors.push(error) }
+    }
+    for (const dispose of release.reverse()) await cleanup(dispose)
+    if (handle?.agent.status === 'running') handle.agent.cancel({ kind: 'disposed' })
+    if (terminal) await cleanup(() => terminal!.closed())
+    else if (connected) await cleanup(() => connected!.session.close())
+    if (handle) {
+      await cleanup(() => handle!.agent.whenIdle())
+      await cleanup(() => sessions.flush(handle!.agent.session))
+      await cleanup(() => handle!.dispose())
+    }
+    if (cleanupErrors.length) {
+      if (failed === undefined) throw new AggregateError(cleanupErrors, 'TUI cleanup failed')
+      process.stderr.write('dsh tui: cleanup after startup failure: ' + cleanupErrors.map(String).join('; ') + '\n')
+    }
   }
 }
 
