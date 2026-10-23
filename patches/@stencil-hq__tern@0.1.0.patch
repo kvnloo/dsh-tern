@@ -58,8 +58,10 @@ diff --git a/src/surface.ts b/src/surface.ts
 +      return () => { this.#ackListeners.delete(listener); };
 +   }
     /** Installs (or with `null` removes) stylesheet `name`. */
-@@ -214,1 +214,2 @@
+@@ -214,2 +214,3 @@
+-      this.#acked = Math.min(s, this.#seq);
 -      this.#pump();
++      this.#acked = Math.min(s, this.#seq);
 +      this.#pump();
 +      for (const listener of this.#ackListeners) listener(this.#acked);
 diff --git a/dist/surface.js b/dist/surface.js
@@ -107,8 +109,10 @@ diff --git a/dist/surface.js b/dist/surface.js
 +        return () => { this.#ackListeners.delete(listener); };
 +    }
      /** Installs (or with `null` removes) stylesheet `name`. */
-@@ -187,1 +187,2 @@
+@@ -187,2 +187,3 @@
+-        this.#acked = Math.min(s, this.#seq);
 -        this.#pump();
++        this.#acked = Math.min(s, this.#seq);
 +        this.#pump();
 +        for (const listener of this.#ackListeners) listener(this.#acked);
 diff --git a/dist/surface.d.ts b/dist/surface.d.ts
