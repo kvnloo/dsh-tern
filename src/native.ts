@@ -17,6 +17,10 @@ export interface TernSurface {
   render(view: { main: Node[]; dock: Node[]; layer: Node[] }): void
   focus(id: string | null): void
   settle?(id: string): void
+  /** Forget renderer snapshots for terminal-evicted nodes, never durable log entries. */
+  forget?(ids: readonly string[]): void
+  /** Advance bounded replay only after a frame actually receives terminal credit. */
+  onAck?(listener: (sequence: number) => void): () => void
 }
 export type TernInput = SessionInput
 export interface TernSession extends AsyncIterable<SessionInput> {
@@ -81,6 +85,12 @@ type ActivePrompt = {
 
 export class NativeTerminal implements Terminal {
   private surface: TernSurface
+  private unlistenAcks: (() => void) | undefined
+  /** Prefix of durable transcript already admitted to the bounded terminal replay. */
+  private replayCursor = 0
+  private replayPermit = true
+  private readonly replayFrameBudget = 512 * 1024
+  private readonly replayEntryLimit = 20 * 1024 * 1024
   private epoch = 0
   private draft = new Draft()
   private answerDraft = new Draft()
@@ -110,9 +120,18 @@ export class NativeTerminal implements Terminal {
   }
 
   private openSurface(): TernSurface {
-    return this.session.open({
+    this.unlistenAcks?.()
+    const surface = this.session.open({
       id: this.surfaceId(), mode: 'inline', role: 'dsh.session', title: 'DeepSeek Harness',
     })
+    this.unlistenAcks = surface.onAck?.(() => {
+      // The real SDK consumes ACK before yielding SessionInput. This listener
+      // therefore drives replay, rather than a timer or invented ACK events.
+      if (this.stopped || surface !== this.surface) return
+      this.replayPermit = true
+      this.render()
+    })
+    return surface
   }
 
   /** Surface lifetime is presentation-only: never reissue Agent intents on reconnect. */
@@ -122,6 +141,8 @@ export class NativeTerminal implements Terminal {
     if (this.epoch > 3) throw new Error('Tern surface recovery limit reached')
     this.gone.clear()
     this.settled.clear()
+    this.replayCursor = 0
+    this.replayPermit = true
     this.surface = this.openSurface()
     this.render()
   }
@@ -142,12 +163,23 @@ export class NativeTerminal implements Terminal {
               if (this.visible) this.recover()
               else this.pendingRecovery = true
             } else {
+              const forgotten: string[] = []
               for (const id of input.event.ids) {
                 const version = this.settled.get(id)
                 if (version) {
                   this.gone.set(id, version)
                   this.settled.delete(id)
+                  forgotten.push(id)
                 }
+              }
+              if (forgotten.length) {
+                // A gone child no longer exists in Tern. The SDK's #sent View
+                // must lose it too, or its next diff sends an invalid del/move.
+                // Never reset or reopen the unrelated surface.
+                if (!this.surface.forget) {
+                  throw new Error('Tern SDK lacks settled-child cache forgetting')
+                }
+                this.surface.forget(forgotten)
               }
               if (this.visible) this.render()
             }
@@ -286,8 +318,34 @@ export class NativeTerminal implements Terminal {
   private render(): void {
     const snapshot = this.last
     if (!snapshot || this.stopped || !this.visible || this.surface.closed) return
+    if (this.replayPermit && this.replayCursor < snapshot.entries.length) {
+      let bytes = 0
+      let cursor = this.replayCursor
+      while (cursor < snapshot.entries.length) {
+        const entry = snapshot.entries[cursor]!
+        const id = 'main.' + entry.id
+        const evicted = this.gone.get(id) === this.version(entry)
+        // Bound *serialized UTF-8* per frame, not character length; the SDK
+        // serializes nodes, their props and nested ids into one JSON message.
+        const estimate = evicted ? 0 :
+          Buffer.byteLength(JSON.stringify(entry.text), 'utf8')
+          + Buffer.byteLength(entry.id, 'utf8') * 3 + 2048
+        if (estimate > this.replayEntryLimit) {
+          throw new Error('Tern durable entry exceeds safe single-message budget: ' + id)
+        }
+        if (bytes > 0 && bytes + estimate > this.replayFrameBudget) break
+        bytes += estimate
+        cursor++
+      }
+      this.replayCursor = cursor
+      this.replayPermit = false
+    }
+    if (this.replayCursor < snapshot.entries.length && !this.surface.onAck) {
+      throw new Error('Tern SDK lacks ACK-driven bounded replay support')
+    }
+    const admitted = snapshot.entries.slice(0, this.replayCursor)
     const main: Node[] = []
-    for (const entry of snapshot.entries) {
+    for (const entry of admitted) {
       const id = 'main.' + entry.id
       const version = this.version(entry)
       if (this.gone.get(id) === version) continue
@@ -441,7 +499,7 @@ export class NativeTerminal implements Terminal {
       this.surface.focus(path)
     }
     if (this.session.caps?.features.includes('settle') && this.surface.settle) {
-      for (const entry of snapshot.entries) {
+      for (const entry of admitted) {
         if (entry.kind === 'tool' && entry.text.startsWith('Running ')) continue
         const id = 'main.' + entry.id
         const version = this.version(entry)
@@ -459,6 +517,17 @@ export class NativeTerminal implements Terminal {
   }
 
   update(snapshot: Snapshot): void {
+    const previous = this.last
+    if (previous && previous.sessionId !== snapshot.sessionId) {
+      // A new Session has a separate history. This is not a gone/settle reset.
+      this.replayCursor = 0
+      this.gone.clear()
+      this.settled.clear()
+      this.replayPermit = true
+    } else if (!previous || this.replayCursor >= previous.entries.length) {
+      // New live/durable changes can render immediately after replay catches up.
+      this.replayPermit = true
+    }
     this.last = snapshot
     this.recorder?.setSessionId(snapshot.sessionId)
     this.recorder ??= new TspRecorder(process.env.DSH_TSP_RECORD, snapshot.sessionId)
@@ -490,6 +559,8 @@ export class NativeTerminal implements Terminal {
     if (this.stopped) return
     this.stopped = true
     this.prompt?.answer(null)
+    this.unlistenAcks?.()
+    this.unlistenAcks = undefined
     try { await this.session.close() } finally { await this.running }
   }
 }
