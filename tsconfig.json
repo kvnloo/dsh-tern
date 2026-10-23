@@ -4,19 +4,60 @@
     "rootDir": "src",
     "outDir": "lib/types"
   },
-  "include": ["src"],
+  "include": [
+    "src"
+  ],
   "references": [
-    { "path": "../../../vendor/cordis" },
-    { "path": "../../../vendor/loader" },
-    { "path": "../../../vendor/schemastery" },
-    { "path": "../../core/agent" },
-    { "path": "../../core/agent-default-model" },
-    { "path": "../../core/session" },
-    { "path": "../../llm/llm" },
-    { "path": "../../boot/cmdline" },
-    { "path": "../../session-query/session-query" },
-    { "path": "../../fs/fs" },
-    { "path": "../../interaction/user-approval" },
-    { "path": "../../interaction/user-questions" }
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../../../vendor/loader"
+    },
+    {
+      "path": "../../../vendor/schemastery"
+    },
+    {
+      "path": "../../core/agent"
+    },
+    {
+      "path": "../../core/agent-default-model"
+    },
+    {
+      "path": "../../core/session"
+    },
+    {
+      "path": "../../llm/llm"
+    },
+    {
+      "path": "../../boot/cmdline"
+    },
+    {
+      "path": "../../session-query/session-query"
+    },
+    {
+      "path": "../../fs/fs"
+    },
+    {
+      "path": "../../interaction/user-approval"
+    },
+    {
+      "path": "../../interaction/user-questions"
+    },
+    {
+      "path": "../../jobs/jobs"
+    },
+    {
+      "path": "../../plan/plan-mode"
+    },
+    {
+      "path": "../../session/session-projection"
+    },
+    {
+      "path": "../../subagent/subagent"
+    },
+    {
+      "path": "../../todo/tool-todo"
+    }
   ]
 }
