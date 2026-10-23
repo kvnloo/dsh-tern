@@ -20,6 +20,7 @@ export interface Snapshot {
   readonly status: 'idle' | 'running'
   readonly draft: string
   readonly cursor: number
+  readonly notice: string
 }
 
 const MAX_ENTRIES = 240
@@ -49,6 +50,7 @@ export class Transcript {
   private currentStatus: 'idle' | 'running' = 'idle'
   private currentDraft = ''
   private currentCursor = 0
+  private currentNotice = ''
 
   constructor(sessionId: string) { this.sessionId = sessionId }
 
@@ -122,6 +124,7 @@ export class Transcript {
   }
 
   status(value: 'idle' | 'running'): void { this.currentStatus = value }
+  notice(message: string): void { this.currentNotice = safeText(message) }
   draft(text: string, cursor = text.length): void {
     this.currentDraft = text
     this.currentCursor = cursor
@@ -134,6 +137,7 @@ export class Transcript {
       status: this.currentStatus,
       draft: this.currentDraft,
       cursor: this.currentCursor,
+      notice: this.currentNotice,
     }
   }
 }
