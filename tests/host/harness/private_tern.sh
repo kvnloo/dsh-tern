@@ -265,12 +265,23 @@ for _ in {1..100}; do
  sleep 0.05
 done
 [[ -S "$CONTROL" ]] || { echo "owned private Tern socket absent" >&2; exit 1; }
-# Tern ctl joins argv into a scenario string; quote paths for that
-# parser as well as for the invoking shell.
+# Tern ctl joins argv into its scenario grammar, NOT a POSIX shell.
+# Scenario string literals use double quotes and JSON-compatible escaping.
+# surface-play consumes a filename directly; do not add shell quotes.
 scenario_quote() {
  python3 - "$1" <<'PY'
-import shlex,sys
-print(shlex.quote(sys.argv[1]))
+import json,sys
+print(json.dumps(sys.argv[1]))
+PY
+}
+# run is different: Tern decodes the scenario string FIRST, then sends the
+# decoded value to its pane shell. Quote the trusted executable path as ONE
+# POSIX shell word, THEN encode the entire command for the scenario parser.
+# Never eval arbitrary command fragments.
+run_quote() {
+ python3 - "$1" <<'PY'
+import json,shlex,sys
+print(json.dumps(shlex.quote(sys.argv[1])))
 PY
 }
 ctl() {
@@ -474,7 +485,7 @@ PY
  done
  inspect replay
 else
- ctl app-launch run "$(scenario_quote "$BASE/launch-dsh.sh")" >/dev/null
+ ctl app-launch run "$(run_quote "$BASE/launch-dsh.sh")" >/dev/null
  if [[ "$LOCATION" == local ]]; then
    await_native
  else
@@ -507,7 +518,7 @@ exec tail -n +1 -f $(printf '%q' "$BASE/log/tern-serve.log")
 EOF
    chmod 700 "$BASE/log-pane.sh"
    ctl log-pane-split split right >/dev/null
-   ctl log-pane-run run "$(scenario_quote "$BASE/log-pane.sh")" >/dev/null
+   ctl log-pane-run run "$(run_quote "$BASE/log-pane.sh")" >/dev/null
    ctl app-pane-focus focus left >/dev/null
    inspect live-split
    ctl viewport-resize resize 1024 768 >/dev/null
