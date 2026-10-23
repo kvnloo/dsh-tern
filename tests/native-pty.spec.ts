@@ -90,7 +90,7 @@ class Output implements TermOutput {
 
 const hello = {
   r: 'hello', v: 1, term: 'tern', ver: '0.1.0',
-  kinds: ['col', 'row', 'text', 'card', 'md', 'editor', 'input', 'el'],
+  kinds: ['col', 'row', 'text', 'card', 'md', 'editor', 'input', 'el', 'overlay', 'tool'],
   features: ['edit', 'send', 'undo', 'settle'], credits: 32, apc: 8192,
   cols: 92, cell: { w: 9, h: 18 }, dark: true, reduceMotion: false,
 }
