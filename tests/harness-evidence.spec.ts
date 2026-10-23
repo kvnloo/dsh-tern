@@ -532,6 +532,7 @@ describe('RFC #6 synthetic evidence seal safety (NOT native proof)', () => {
       '/tmp/quote "double" and ' + "'single'" + '/file.jsonl',
       '/tmp/back\\slash/$(false) $HOME/replay.jsonl',
       '/tmp/Unicode α😀 and spaces/replay.jsonl',
+      '/tmp/line\nbreak and \ttab/replay.jsonl',
     ]) {
       // Execute only the extracted production encoding helpers. No Tern, Sway,
       // DSH, provider, user command or arbitrary fragment is launched.
@@ -547,8 +548,8 @@ describe('RFC #6 synthetic evidence seal safety (NOT native proof)', () => {
       expect(JSON.parse(lines[0]!)).toBe(filename) // surface-play file argument
       // Tern's scenario parser documents literal Unicode and only \\", \\\\, \\n, \\t
       // escapes; JSON's \\uXXXX form is not an advertised scenario escape.
-      expect(lines[0]).not.toMatch(/\\\\u[0-9a-f]{4}/i)
-      expect(lines[1]).not.toMatch(/\\\\u[0-9a-f]{4}/i)
+      expect(lines[0]).not.toMatch(/\\u[0-9a-f]{4}/i)
+      expect(lines[1]).not.toMatch(/\\u[0-9a-f]{4}/i)
       const shellWord = JSON.parse(lines[1]!) as string
       // Only a trusted synthetic filename is evaluated by the POSIX test shell.
       const roundTrip = spawnSync('sh', ['-c', 'printf %s ' + shellWord], {
