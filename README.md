@@ -167,3 +167,59 @@ Mock-SDK callback tests are insufficient on their own: use the real
 `KeyDecoder` tests, keyless profile test and a private real-Tern capture.
 No command result is claimed by this document; OMP must run and inspect
 the relevant focused tests and runtime matrix before promotion.
+
+## Retention and packed-consumer regression gates (TRN6)
+
+Tern's `gone` event for a **settled child** means the native terminal
+has already forgotten that subtree; any later `del`, `move`, `set` or
+parent-before operation referencing it is invalid. The 0.1.0 Surface
+normally retains its last sent View, so filtering DSH's Snapshot alone is
+insufficient. This downstream SDK patch adds a typed `Surface.forget(ids)`
+that prunes sent, latest, pending and queued **presentation** references
+without emitting a delete or reopening the surface. The complete Session
+event log and other settled entries remain authoritative.
+
+A durable transcript exceeding the protocol's 24 MiB reassembled-message
+limit must never be sent as one initial frame. Native rendering admits a
+bounded prefix (512 KiB estimated encoded entry data per progress step,
+20 MiB maximum for an individual entry), keeps durable IDs/order intact,
+and advances only on actual SDK `Surface.onAck` callbacks. SDK credit
+accounting and frame coalescing remain authoritative. A whole-surface
+`gone` still reopens only the missing surface with its real protocol
+`open` event; a child `gone` never does. Hidden surfaces defer replay
+until visible, and no historical Session events are truncated.
+
+The root pnpm `patchedDependencies` map supplies the fixed SDK to
+development builds, but **does not travel into a clean npm install**.
+The package-local `tsdown.config.ts` therefore bundles the patched
+`@stencil-hq/tern@0.1.0` SDK inside the shipped host `lib/index.js`.
+Do not treat a root-only patched install as consumer proof.
+
+On the fleet-build MBP after admission/lock approval, from the repository
+root and at the **actual checked-out branch SHA**, run:
+
+~~~sh
+pnpm install --frozen-lockfile --prefer-offline
+pnpm run build:native-system
+pnpm exec vitest run packages/bundle/tui-app/tests/retention.spec.ts packages/bundle/tui-app/tests/transport-conformance.spec.ts packages/bundle/tui-app/tests/native-regressions.spec.ts
+pnpm run build:lib:host
+node packages/bundle/tui-app/tests/fixtures/verify-packed-sdk.mjs
+pnpm run test:e2e apps/cli/tests/profiles/tui/tests/keyless.e2e.ts
+pnpm run hygiene
+pnpm run doc-sync
+~~~
+
+The packed-consumer gate compares a real `pnpm pack` artifact against
+the **unpatched npm registry 0.1.0** negative control: it asserts that
+the shipped JS includes Surface forget/ACK methods rather than external
+SDK imports while the registry's unmodified JS contains neither method
+nor the root hello-version guard. For an offline registry control, set
+`REGISTRY_TERN_TARBALL` to a previously downloaded **unpatched**
+registry archive. The check never installs/publishes npm packages.
+
+A full PTY/application ANSI late-hello witness still requires the CLI
+fallback boundary (owned separately); parser-only witnesses are not proof
+that a late reply after ANSI initialization stays outside readline.
+Do not claim that gate or real Tern/SSH/ConPTY acceptance until the
+lead's authorized isolated headless environment reproduces it. All
+connector-authored changes remain **unrun** pending those checks.
