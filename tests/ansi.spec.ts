@@ -52,6 +52,41 @@ describe('ANSI fallback does not require a Tern SDK', () => {
     expect(received).toEqual(['real user turn'])
   })
 
+  it('isolates a midline composer from approval and restores the draft after answering', async () => {
+    const f = fixture()
+    const received: string[] = []
+    await f.terminal.start(text => received.push(text), () => {}, () => {})
+    f.stdin.write('unsent')
+    await new Promise(resolve => setImmediate(resolve))
+    const answer = f.terminal.ask({
+      title: 'Allow?', choices: [
+        { label: 'Allow once', value: 'allowed-once' },
+        { label: 'Deny', value: 'rejected' },
+      ],
+    })
+    f.stdin.write('2\n')
+    expect(await answer).toBe('rejected')
+    expect(received).toEqual([])
+    f.stdin.write(' rest\n')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(received).toEqual(['unsent rest'])
+  })
+
+  it('offers every choice and accepts a multi-select comma answer', async () => {
+    const f = fixture()
+    await f.terminal.start(() => {}, () => {}, () => {})
+    const answer = f.terminal.ask({
+      title: 'Choose', multiple: true, choices: [
+        { label: 'Alpha', value: 'Alpha' },
+        { label: 'Beta', value: 'Beta' },
+        { label: 'Gamma', value: 'Gamma' },
+      ],
+    })
+    expect(f.output()).toContain('3) Gamma')
+    f.stdin.write('1, 3\n')
+    expect(await answer).toBe('1, 3')
+  })
+
   it('abort resolves unanswered requests as null without routing input', async () => {
     const f = fixture()
     await f.terminal.start(() => { throw Error('incorrect user submission') }, () => {}, () => {})
