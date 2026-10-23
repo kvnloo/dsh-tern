@@ -55,6 +55,21 @@ describe('SDK parser -> owned ANSI input, with no process stdin monkeypatch', ()
     }
   })
 
+  it('holds a split TSP header itself across the probe-to-ANSI transition', async () => {
+    const { stdin, fence } = fixture()
+    const seen: Buffer[] = []
+    try {
+      stdin.write('P\x1b_')
+      fence.activate().on('data', (chunk: Buffer) => seen.push(Buffer.from(chunk)))
+      stdin.write('tsp;r;{"r":"hello","v":99}\x1b\\Q')
+      await tick()
+      expect(Buffer.concat(seen)).toEqual(utf8('PQ'))
+    } finally {
+      fence.close()
+      stdin.destroy()
+    }
+  })
+
   it('retains a real lone Escape via the SDK public flush operation', async () => {
     const { stdin, fence } = fixture()
     const bytes: Buffer[] = []
