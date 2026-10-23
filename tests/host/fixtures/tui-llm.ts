@@ -86,8 +86,7 @@ class TuiFixtureAdapter extends LlmAdapter {
       return
     }
 
-    const answer = text.includes('[question-]') || isQuestion
-      ? 'question completed'
+    const answer = isQuestion ? 'question completed'
       : needsTool ? 'tool settled' : 'echo: ' + text
     yield { type: 'block-start', index: 0, blockType: 'text' }
     for (const part of [answer.slice(0, 5), answer.slice(5)]) {
