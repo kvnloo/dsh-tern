@@ -129,7 +129,53 @@ diff --git a/src/surface.ts b/src/surface.ts
 +      return () => { this.#ackListeners.delete(listener); };
 +   }
     /** Installs (or with `null` removes) stylesheet `name`. */
-@@ -214,2 +319,3 @@
+@@ -181,4 +286,5 @@
+-   /**
+-    * Closes the surface: what is still pending goes as a last frame (credit
+-    * or not, so the kept surface shows the final view), then `x`.
+-    */
++   /**
++    * Closes under the negotiated frame credits; a detached pane may never ACK.
++    * Unsent pending views/ops are abandoned before `x`, rather than claimed
++    * delivered. Kept main reflects the last sent, not necessarily ACKed, view.
++    */
+@@ -188,2 +294,2 @@
+-      try {
+-         this.#flush();
++      try {
++         if (!this.blocked) this.#flush();
+@@ -193,3 +299,8 @@
+-      try {
+-         const keep = options.keep ?? true;
+-         this.#link.send({ verb: 'x', body: { id: this.id, keep } });
++      const keep = options.keep ?? true;
++      this.#closed = true;
++      this.#pending = undefined;
++      this.#queue = [];
++      this.#resetMain = false;
++      this.#ackListeners.clear();
++      try {
++         this.#link.send({ verb: 'x', body: { id: this.id, keep } });
+@@ -196,4 +307,1 @@
+-         this.#sent = keep ? new View([this.#sent.regions[0], undefined, undefined]) : new View();
+-         this.#closed = true;
+-         this.#link.dropped(this);
+-      } catch (error) {
++      } catch (error) {
+@@ -200,3 +308,6 @@
+-         failure ??= { error };
+-      }
+-      if (failure) throw failure.error;
++         failure ??= { error };
++      }
++      this.#sent = keep ? new View([this.#sent.regions[0], undefined, undefined]) : new View();
++      this.#latest = this.#sent;
++      this.#link.dropped(this);
++      if (failure) throw failure.error;
+@@ -213,1 +324,1 @@
+-      if (s <= this.#acked) return;
++      if (this.#closed || s <= this.#acked) return;
+@@ -214,2 +325,3 @@
 -      this.#acked = Math.min(s, this.#seq);
 -      this.#pump();
 +      this.#acked = Math.min(s, this.#seq);
@@ -249,7 +295,53 @@ diff --git a/dist/surface.js b/dist/surface.js
 +        return () => { this.#ackListeners.delete(listener); };
 +    }
      /** Installs (or with `null` removes) stylesheet `name`. */
-@@ -154,2 +258,3 @@
+@@ -122,4 +226,5 @@
+-    /**
+-     * Closes the surface: what is still pending goes as a last frame (credit
+-     * or not, so the kept surface shows the final view), then `x`.
+-     */
++    /**
++     * Closes under the negotiated frame credits; a detached pane may never ACK.
++     * Unsent pending views/ops are abandoned before `x`, rather than claimed
++     * delivered. Kept main reflects the last sent, not necessarily ACKed, view.
++     */
+@@ -129,2 +234,2 @@
+-        try {
+-            this.#flush();
++        try {
++            if (!this.blocked) this.#flush();
+@@ -134,3 +239,8 @@
+-        try {
+-            const keep = options.keep ?? true;
+-            this.#link.send({ verb: 'x', body: { id: this.id, keep } });
++        const keep = options.keep ?? true;
++        this.#closed = true;
++        this.#pending = undefined;
++        this.#queue = [];
++        this.#resetMain = false;
++        this.#ackListeners.clear();
++        try {
++            this.#link.send({ verb: 'x', body: { id: this.id, keep } });
+@@ -137,4 +247,1 @@
+-            this.#sent = keep ? new View([this.#sent.regions[0], undefined, undefined]) : new View();
+-            this.#closed = true;
+-            this.#link.dropped(this);
+-        } catch (error) {
++        } catch (error) {
+@@ -141,3 +248,6 @@
+-            failure ??= { error };
+-        }
+-        if (failure) throw failure.error;
++            failure ??= { error };
++        }
++        this.#sent = keep ? new View([this.#sent.regions[0], undefined, undefined]) : new View();
++        this.#latest = this.#sent;
++        this.#link.dropped(this);
++        if (failure) throw failure.error;
+@@ -153,1 +263,1 @@
+-        if (s <= this.#acked) return;
++        if (this.#closed || s <= this.#acked) return;
+@@ -154,2 +264,3 @@
 -        this.#acked = Math.min(s, this.#seq);
 -        this.#pump();
 +        this.#acked = Math.min(s, this.#seq);
