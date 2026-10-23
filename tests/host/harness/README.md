@@ -96,7 +96,7 @@ Cases exercise: ANSI real tool start/result twice with different persisted
 toolCallIds; native one-card in-place tool result plus fresh-process resume;
 Unicode/multiline draft and caret through keyboard denial; genuine
 TSP ev:action, act:click on a choice found from emitted el(tag:button)
-documents for a fresh allow-once request; strict Escape-cancel approval;
+documents for a fresh allow-once request; negotiated kitty Escape rejection;
 ANSI question choice; native question choice and multi-select/custom
 answer; native question Escape cancellation; genuinely in-flight provider
 stream with observed live text, Ctrl-C, one durable interrupted:true partial,
@@ -115,7 +115,7 @@ SDK add/text/property updates, stable card IDs and editor sendable/caret
 state. The fixture-only, abortable fs.watch handoff holds the real tool before
 ApprovalService takes input; the driver releases it only after composing a
 Unicode multiline draft through real PTY keys. wait_after waits for an
-observed new byte occurrence and node_after for a new semantic frame, never
+observed new byte occurrence and node_after for a later ordered semantic state change, never
 a sleep. Failures keep owner-only
 PTY bytes, decoded text, JSON frames and durable Sessions in their reported
 private workspace; success removes the entire private workspace after
@@ -131,7 +131,7 @@ The tests preserve both contracts. Tool-call-only assistant messages have
 empty text, so the textual-reply oracle filters those without omitting real
 tool call/result ID checks. The original MBP source run at production
 08768d429d recorded **6/14 passing, 8/14 failing** (all five preexisting
-keyless plus the native ANSI question scenario passed); this worker did
+keyless plus the ANSI question scenario passed); this worker did
 NOT rerun those gates and claims no corrected pass result.
 
 Lead OMP must obtain its fleet-build lock, run in the private Linux PTY
