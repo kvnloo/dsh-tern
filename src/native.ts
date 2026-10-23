@@ -163,6 +163,7 @@ export class NativeTerminal implements Terminal {
           spans: [{ s: 'strong', t: 'dsh' }, { s: 'dim', t: ' · ' + snapshot.sessionId + ' · ' + snapshot.status }],
         }),
       ]),
+      ...(snapshot.notice ? [this.node('text', { key: 'notice', role: 'dsh.notice', text: snapshot.notice })] : []),
       this.node('col', { key: 'composer', role: 'omp.editor' }, [
         this.node('row', { key: 'line', role: 'omp.composer.line' }, [editor]),
       ]),
