@@ -54,7 +54,7 @@ function outbound(out: PtyOutput, verb: string): Array<Record<string, unknown>> 
 }
 
 async function negotiate(
-  response: Uint8Array | undefined = inbound('r', hello),
+  response: Uint8Array | null = inbound('r', hello),
   options: { firstDa1?: boolean; timeout?: number; env?: Readonly<Record<string, string>> } = {},
 ): Promise<{ input: PtyInput; output: PtyOutput; session: Session | null }> {
   const input = new PtyInput()
@@ -83,7 +83,7 @@ describe('Tern 0.1.0 PTY handshake and parser compatibility', () => {
     expect(early.session).toBeNull()
     expect(early.input.isRaw).toBe(false)
 
-    const none = await negotiate(undefined, { timeout: 5 })
+    const none = await negotiate(null, { timeout: 5 })
     expect(none.session).toBeNull()
     expect(none.input.isRaw).toBe(false)
   })

@@ -1,0 +1,9 @@
+{
+  "prompts": [
+    "alpha",
+    "atomic fixture",
+    "[failure]"
+  ],
+  "fixture_backend": "deterministic",
+  "comment": "The second live Hermes/OMP capture must use the identical three prompts, the identical local Tern binary SHA256 and a keyless gateway fixture. Replay is not a live differential."
+}
