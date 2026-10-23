@@ -694,7 +694,7 @@ describe('RFC #6 synthetic PTY active-question selection (NOT live pointer proof
       id: 'dock.navigation', k: 'col', p: { role: 'dsh.navigation' },
       c: [
         { id: 'dock.navigation.accept', k: 'el',
-          p: { tag: 'button', text: '1) Allow once', role: 'dsh.navigation.choice' } },
+          p: { tag: 'button', text: '1) Allow once', role: 'dsh.question.choice' } },
         { id: 'dock.navigation.editor', k: 'editor', p: { text: 'not an answer' } },
       ],
     }
@@ -771,7 +771,7 @@ describe('RFC #6 synthetic PTY active-question selection (NOT live pointer proof
     const run = probePtyDriver([
       [
         addPtyNode({ id: 'dock.nav.choice.0', k: 'el',
-          p: { tag: 'button', text: '1) Allow once', role: 'dsh.navigation.choice' } }, 'dock'),
+          p: { tag: 'button', text: '1) Allow once', role: 'dsh.question.choice' } }, 'dock'),
         addPtyNode({ id: 'dock.composer.input', k: 'input',
           p: { text: 'unsent draft' } }, 'dock'),
         addPtyNode({ id: root + '.choice.0', k: 'el',
