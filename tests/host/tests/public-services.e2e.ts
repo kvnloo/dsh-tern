@@ -512,9 +512,10 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
       const first = await execute(dir, 'native-choice', 'native', [
         { wait: '\x1b_tsp;o;' },
         nativeSend('[question-choice]'),
-        { wait: 'Choose a fixture option' },
+        { node: { contains: 'Choose a fixture option' } },
         { write: '2' },
-        { wait: '"selected"' },
+        { node_after: { contains: '"selected"' } },
+        { node_after: { id: 'dock.status.label', contains: ' · idle' } },
         nativeExit,
       ])
       expect(first.exit_code, first.output).toBe(0)
@@ -526,9 +527,10 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
       const second = await execute(dir, 'native-multi', 'native', [
         { wait: '\x1b_tsp;o;' },
         nativeSend('[question-multi]'),
-        { wait: 'Choose features and optional other text' },
+        { node: { contains: 'Choose features and optional other text' } },
         { answer: 'Alpha, Beta, custom 😀' },
-        { wait: '"custom"' },
+        { node_after: { contains: '"custom"' } },
+        { node_after: { id: 'dock.status.label', contains: ' · idle' } },
         nativeExit,
       ], { sessionId: initial.id })
       expect(second.exit_code, second.output).toBe(0)
@@ -541,7 +543,7 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
       expect(JSON.parse(toolOutput(pairs[1]!))).toEqual({
         answers: [{ id: 'multi', selected: ['Alpha', 'Beta'], custom: 'custom 😀' }],
       })
-      expect(after.events.filter(event => event.type === 'user/message')).toHaveLength(2)
+      expect(users(after)).toHaveLength(2) // excludes legitimate context/instruction messages
     }), 170_000)
 
   it('cancels a real outstanding user-question via Escape without injecting an answer as an Agent message', () =>
@@ -549,9 +551,10 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
       const run = await execute(dir, 'native-question-cancel', 'native', [
         { wait: '\x1b_tsp;o;' },
         nativeSend('[question-cancel]'),
-        { wait: 'Choose a fixture option' },
-        { hex: '1b' },
-        { wait: 'user question was cancelled' },
+        { node: { contains: 'Choose a fixture option' } },
+        { hex: '1b5b323775' }, // negotiated kitty Escape
+        { node_after: { contains: 'user question was cancelled' } },
+        { node_after: { id: 'dock.status.label', contains: ' · idle' } },
         nativeExit,
       ])
       expect(run.exit_code, run.output).toBe(0)
@@ -562,39 +565,62 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
       const message = pairs[0]?.result.data?.['message']
       expect((message as { isError?: unknown } | undefined)?.isError).toBe(true)
       expect(toolOutput(pairs[0]!)).toContain('user question was cancelled')
-      expect(log.events.filter(event => event.type === 'user/message')).toHaveLength(1)
+      expect(users(log)).toHaveLength(1) // no answer was injected as user intent
       expect(await markerExists(dir)).toBe(false)
     }), 140_000)
 
-  it('aborts an observed in-flight model stream, commits no speculative reply, and resumes normally', () =>
+  it('persists exactly one flagged interrupted partial, completes a later turn, and resumes without duplication', () =>
     workspace('model-abort', async dir => {
       const first = await execute(dir, 'native-abort', 'native', [
         { wait: '\x1b_tsp;o;' },
         nativeSend('[inflight]'),
-        { wait: 'SPECULATIVE_INFLIGHT_NOT_DURABLE' },
-        { hex: '03' }, // real PTY Ctrl-C while streaming
-        { wait_after: 'idle' }, // new renderer idle state, not a wall-clock delay
+        { node: { contains: 'PARTIAL_INFLIGHT_INTERRUPTED' } },
+        { hex: '03' }, // real PTY Ctrl-C while the provider is blocked
+        { node_after: { id: 'dock.status.label', contains: ' · idle' } },
         nativeSend('after-abort'),
-        { wait: 'echo: after-abort' },
+        { node_after: { contains: 'echo: after-abort' } },
+        { node_after: { id: 'dock.status.label', contains: ' · idle' } },
         nativeExit,
       ])
       expect(first.exit_code, first.output).toBe(0)
       const log = await history(dir)
       expect(users(log)).toEqual(['[inflight]', 'after-abort'])
-      expect(committed(log)).toEqual(['echo: after-abort'])
-      expect(log.events.some(event => event.type === 'turn/end')).toBe(true)
+      const messages = assistantMessages(log)
+      const interrupted = messages.filter(item => item.interrupted)
+      expect(interrupted).toHaveLength(1)
+      expect(interrupted[0]?.text).toBe('PARTIAL_INFLIGHT_INTERRUPTED')
+      expect(interrupted[0]?.event.data?.['interrupted']).toBe(true)
+      expect(messages.filter(item => !item.interrupted).map(item => item.text))
+        .toEqual(['echo: after-abort'])
+      expect(committedText(log)).toEqual(['PARTIAL_INFLIGHT_INTERRUPTED', 'echo: after-abort'])
+      expect(log.events.filter(event => event.type === 'turn/end')).toHaveLength(2)
+      // One semantic identity spans transient live preview and durable append.
+      for (const message of messages) {
+        const turn = message.event.data?.['turn']
+        const step = message.event.data?.['step']
+        expect(typeof turn).toBe('number')
+        expect(typeof step).toBe('number')
+        const id = 'main.assistant.' + String(turn) + '.' + String(step)
+        expect(allAddedIds(first).filter(added => added === id), 'duplicate live/durable ' + id)
+          .toHaveLength(1)
+      }
+
       const resumed = await execute(dir, 'ansi-resume', 'ansi', [
         { wait: 'dsh TUI (ANSI)' },
         { wait: '[you] after-abort' },
         { write: 'post-resume\r' },
         { wait: '[dsh] echo: post-resume' },
+        { wait_after: '[dsh] Ready' },
         { write: '/quit\r' },
       ], { sessionId: log.id })
       expect(resumed.exit_code, resumed.output).toBe(0)
-      expect(resumed.output).not.toContain('SPECULATIVE_INFLIGHT_NOT_DURABLE')
+      expect(resumed.output.split('PARTIAL_INFLIGHT_INTERRUPTED').length - 1)
+        .toBe(1) // persisted interruption is replayed, not duplicated or lost
       const after = await history(dir)
       expect(after.id).toBe(log.id)
       expect(users(after)).toEqual(['[inflight]', 'after-abort', 'post-resume'])
-      expect(committed(after)).toEqual(['echo: after-abort', 'echo: post-resume'])
+      expect(committedText(after))
+        .toEqual(['PARTIAL_INFLIGHT_INTERRUPTED', 'echo: after-abort', 'echo: post-resume'])
+      expect(assistantMessages(after).filter(item => item.interrupted)).toHaveLength(1)
     }), 175_000)
 })
