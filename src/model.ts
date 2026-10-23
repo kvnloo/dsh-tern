@@ -18,6 +18,7 @@ export interface Snapshot {
   readonly entries: readonly Entry[]
   readonly live: string
   readonly liveId?: string
+  readonly latestSeq?: number
   readonly status: 'idle' | 'running'
   readonly draft: string
   readonly cursor: number
@@ -44,6 +45,7 @@ export function textContent(content: readonly unknown[]): string {
 /** One session's bounded on-screen projection. The underlying Session retains all history. */
 export class Transcript {
   readonly sessionId: string
+  private lastSequence = -1
   private readonly seen = new Set<number>()
   private readonly rowSequence = new Map<string, number>()
   private readonly runningTools = new Map<string, { turn: number; name: string }>()
@@ -84,6 +86,7 @@ export class Transcript {
   accept(event: SessionEvent): Entry | undefined {
     if (this.seen.has(event.seq)) return
     this.seen.add(event.seq)
+    this.lastSequence = event.seq
     if (event.surfaceOp && typeof event.surfaceOp !== 'string') {
       const { startSeq, endSeq } = event.surfaceOp
       this.rows = this.rows.filter(row => {
@@ -179,6 +182,7 @@ export class Transcript {
       entries: [...this.rows],
       live: this.preview,
       ...(this.previewId ? { liveId: this.previewId } : {}),
+      ...(this.lastSequence >= 0 ? { latestSeq: this.lastSequence } : {}),
       status: this.currentStatus,
       draft: this.currentDraft,
       cursor: this.currentCursor,
