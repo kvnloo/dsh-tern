@@ -1,0 +1,37 @@
+/**
+ * Per-profile CLI provider. The launcher owns --profile; this plugin owns
+ * TUI-specific flags and publishes its values as an injected Cordis service.
+ */
+import { Command } from 'commander'
+import type { Context } from '@deepseek-ai/cordis'
+import { parseCmdline } from '@deepseek-ai/dsh-cmdline'
+
+export const name = 'tui-startup'
+export const inject = ['cmdlineArgs']
+export const TUI_STARTUP_SERVICE = 'tuiStartup'
+
+export interface TuiStartupValues {
+  sessionId?: string
+  native: boolean
+}
+
+export function apply(ctx: Context): void {
+  const command = new Command()
+    .name('dsh --profile tui')
+    .description('Interactive, session-backed terminal UI; Tern native surface when available, ANSI otherwise.')
+    .helpOption('-h, --help', 'show TUI help')
+    .option('--no-native', 'use the line-oriented ANSI TUI even inside Tern')
+    .option('--session-id <id>', 'resume this exact persisted Session')
+    .addHelpText('after', '\nExamples:\n  dsh tui\n  dsh tui --no-native\n  dsh tui --session-id session-...\n')
+  command.action(() => {
+    const options = command.opts<{ sessionId?: string; native: boolean }>()
+    if (options.sessionId !== undefined && options.sessionId.trim() === '') {
+      command.error('--session-id requires a non-empty Session id')
+    }
+    ctx.provide(TUI_STARTUP_SERVICE, {
+      sessionId: options.sessionId,
+      native: options.native !== false,
+    } satisfies TuiStartupValues)
+  })
+  parseCmdline(ctx, command)
+}
