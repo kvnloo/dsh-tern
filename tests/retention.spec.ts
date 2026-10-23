@@ -170,13 +170,13 @@ async function connected() {
 }
 
 describe('RFC #6 real-SDK settled history retention', () => {
-  it('forgets a settled/gone child from the SDK sent View without removing other durable entries', async () => {
+  it('keeps an opaque prefix-sharing durable sibling when another child is gone', async () => {
     const { input, oracle, terminal } = await connected()
     const first: Entry = { id: 'one', kind: 'user', text: 'durable first' }
-    const second: Entry = { id: 'two', kind: 'assistant', text: 'durable second' }
+    const second: Entry = { id: 'one.sibling', kind: 'assistant', text: 'durable second' }
     try {
       terminal.update(snapshot([first, second]))
-      await vi.waitFor(() => expect(oracle.settled.has('main.one') && oracle.settled.has('main.two')).toBe(true))
+      await vi.waitFor(() => expect(oracle.settled.has('main.one') && oracle.settled.has('main.one.sibling')).toBe(true))
       await new Promise(resolve => setImmediate(resolve))
       const quiescent = oracle.frames.length
       await new Promise(resolve => setImmediate(resolve))
@@ -186,10 +186,10 @@ describe('RFC #6 real-SDK settled history retention', () => {
       await new Promise(resolve => setImmediate(resolve))
       expect(oracle.evicted.has('main.one')).toBe(true)
       terminal.update(snapshot([first, { ...second, text: 'updated second' }]))
-      await vi.waitFor(() => expect(oracle.text('main.two.body')).toBe('updated second'))
+      await vi.waitFor(() => expect(oracle.text('main.one.sibling.body')).toBe('updated second'))
       expect(oracle.opens).toEqual(['dsh'])
       expect(oracle.nodes.has('main.one')).toBe(false)
-      expect(oracle.children.get('main')).toEqual(['main.two'])
+      expect(oracle.children.get('main')).toEqual(['main.one.sibling'])
     } finally { await terminal.closed() }
   })
 
