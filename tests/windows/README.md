@@ -17,13 +17,16 @@ publishes packages nor launches external model providers.
 | Native test-only backend | `node-pty@1.1.0`, `node-addon-api@7.1.0`; separate `tests/windows/package.json` |
 | Windows | real `win32` on `windows-latest`, OS build >=18309; ConPTY native addon, `useConptyDll: false` |
 
-The `node-pty` Windows implementation binds directly to
-`loadNativeModule('conpty')` and `startProcess`. The deprecated
-`useConpty` option does not select a WinPTY fallback in this pinned version.
-The test checks the backend source identity, actual platform and native child
-`stdin.isTTY` / `stdout.isTTY`. Source inspection is **not** counted as
-ConPTY acceptance: real terminal output, native TSP frames, and the physical
-Session log must also pass.
+The published `node-pty@1.1.0` Windows backend contains **both**
+ConPTY and WinPTY implementations. This test expressly sets
+`useConpty: true` and `useConptyDll: false`, checks the pinned
+`WindowsPtyAgent` selector, and asserts that **each actual spawned instance**
+has `_useConpty === true` and `_useConptyDll === false`. Those private
+test-only assertions are deliberately tied to the pinned released code. A
+WinPTY launch fails the gate. The test also checks the native child
+`stdin.isTTY` / `stdout.isTTY`, but source inspection and TTY booleans
+alone are **not** ConPTY acceptance: real child output, OSC 877 semantic TSP
+frames, and physical Session logs must also pass.
 
 The exact SDK patch remains untouched until a real native RED is reproduced
 and reviewed. Do not replace the physical carrier with `PassThrough`,
