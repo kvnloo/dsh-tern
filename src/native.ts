@@ -292,10 +292,30 @@ export class NativeTerminal implements Terminal {
   }
 
   private version(entry: Entry): string {
-    return createHash('sha256').update(entry.kind).update('\0').update(entry.text).digest('hex')
+    // Retention/gone must distinguish lifecycle and names even when text is identical.
+    return createHash('sha256')
+      .update(entry.kind).update('\0').update(entry.text).update('\0')
+      .update(entry.tool?.name ?? '').update('\0').update(entry.tool?.status ?? '')
+      .digest('hex')
   }
 
   private renderEntry(entry: Entry): Node {
+    if (entry.tool) {
+      const { name, status } = entry.tool
+      // Tern owns local collapsible state. Do not send collapsed on updates:
+      // changing that prop resets the user's folded state.
+      if (this.supported('tool')) return this.n('tool', {
+        key: entry.id, role: 'dsh.tool', name, title: name, status, collapsible: true,
+      }, [this.textNode('body', entry.text)])
+      const head = name + ' · ' + status
+      if (!this.supported('card', 'col', 'row')) {
+        return this.textNode(entry.id, head + '\n' + entry.text)
+      }
+      return this.wrap(entry.id, 'dsh.tool', [
+        this.textNode('identity', head),
+        this.textNode('body', entry.text),
+      ], status === 'error' ? { tone: 'error' } : {})
+    }
     const role = entry.kind === 'tool' || entry.kind === 'error'
       ? 'dsh.tool' : entry.kind === 'user' ? 'dsh.user' : 'dsh.assistant'
     const markdown = entry.kind === 'assistant' || entry.kind === 'user'
@@ -332,7 +352,7 @@ export class NativeTerminal implements Terminal {
         // Bound *serialized UTF-8* per frame, not character length; the SDK
         // serializes nodes, their props and nested ids into one JSON message.
         const estimate = evicted ? 0 :
-          Buffer.byteLength(JSON.stringify(entry.text), 'utf8')
+          Buffer.byteLength(JSON.stringify(entry), 'utf8')
           + Buffer.byteLength(entry.id, 'utf8') * 3 + 2048
         if (estimate > this.replayEntryLimit) {
           throw new Error('Tern durable entry exceeds safe single-message budget: ' + id)
@@ -430,10 +450,13 @@ export class NativeTerminal implements Terminal {
     if (prompt) {
       // Root identity belongs to this opening. Reusing a logical approval ID
       // cannot retarget old wire events through the SDK's newest handler map.
-      const group = this.supported('card', 'col', 'row')
+      // A plain card inside layer is pointer-transparent in Tern: only the
+      // negotiated overlay establishes a hit-testable modal/backdrop there.
+      const overlay = this.supported('overlay')
+      const group = overlay ?? this.supported('card', 'col', 'row')
       const scopedKey = (part: string): string => group ? part : prompt.root + '.' + part
       const options = prompt.request.choices ?? []
-      const children: Node[] = [this.textNode(scopedKey('title'), prompt.request.title)]
+      const children: Node[] = overlay ? [] : [this.textNode(scopedKey('title'), prompt.request.title)]
       if (prompt.request.detail) {
         children.push(this.textNode(scopedKey('detail'), prompt.request.detail, true))
       }
@@ -482,10 +505,18 @@ export class NativeTerminal implements Terminal {
       } else {
         children.push(this.textNode(scopedKey('answer'), this.answerDraft.text || 'Type answer; Enter confirms'))
       }
-      if (group) {
-        layer.push(this.n(group, { key: prompt.root, role: 'dsh.question' }, children))
+      if (overlay) {
+        layer.push(this.n('overlay', {
+          key: prompt.root, role: 'dsh.question', head: prompt.request.title,
+          modal: true, anchor: 'center', size: 'md',
+        }, children))
+      } else if (group) {
+        // Dock is an interactive region without the overlay kind. Both click
+        // targets and the keyboard owner remain usable; never use bare layer.
+        dock.push(this.n(group, { key: prompt.root, role: 'dsh.question' }, children))
       } else {
-        layer.push(...children)
+        // Even leaf-only terminals retain the dock's pointer and PTY key path.
+        dock.push(...children)
       }
     }
     this.recorder?.setContext({
@@ -495,7 +526,8 @@ export class NativeTerminal implements Terminal {
     this.surface.render({ main, dock, layer })
     this.revision += 1
     // Focus only an actual editor/input node. Never issue focus to rows/text.
-    const focus = prompt && answerKind ? 'layer.' + prompt.root + '.answer'
+    const focus = prompt && answerKind
+      ? (this.supported('overlay') ? 'layer.' : 'dock.') + prompt.root + '.answer'
       : !prompt && editorKind
         ? ['dock', colKind ? 'composer' : '', rowKind ? 'line' : '', 'input']
           .filter(Boolean).join('.')
@@ -506,7 +538,7 @@ export class NativeTerminal implements Terminal {
     }
     if (this.session.caps?.features.includes('settle') && this.surface.settle) {
       for (const entry of admitted) {
-        if (entry.kind === 'tool' && entry.text.startsWith('Running ')) continue
+        if (entry.tool?.status === 'running') continue
         const id = 'main.' + entry.id
         const version = this.version(entry)
         if (this.gone.get(id) === version || this.settled.get(id) === version) continue
