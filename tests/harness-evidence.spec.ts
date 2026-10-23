@@ -236,7 +236,14 @@ describe('RFC #6 synthetic startup protocol validator (NOT parity proof)', () =>
         ['set', 'hermes.message', { text: 'Updated' }],
         ['splice', 'hermes.message', 0, 0, 'Start '],
         ['move', 'hermes.editor', 'hermes.root', null],
+        ['reveal', 'hermes.editor', 'start'],
+        ['reveal', 'hermes.editor', 'end'],
         ['reveal', 'hermes.editor', 'nearest'],
+        ['scroll', 'hermes.editor', 'line-up'],
+        ['scroll', 'hermes.editor', 'line-down'],
+        ['scroll', 'hermes.editor', 'page-up'],
+        ['scroll', 'hermes.editor', 'page-down'],
+        ['scroll', 'hermes.editor', 'start'],
         ['scroll', 'hermes.editor', 'end'],
         ['settle', 'hermes.message'],
         ['del', 'hermes.message'],
@@ -262,6 +269,7 @@ describe('RFC #6 synthetic startup protocol validator (NOT parity proof)', () =>
       ['move', 'hermes.editor', 'hermes.root', 17],
       ['add', 'other', 'hermes', null, { id: 'mismatched', k: 'text' }],
       ['reveal', 'hermes.message', 'bottom'],
+      ['reveal', 'hermes.message', 'center'],
       ['scroll', 'hermes.editor', 'wrong-direction'],
       ['scroll', 'hermes.editor', null],
       ['suspend', 'extra'], ['resume', null],
@@ -537,6 +545,10 @@ describe('RFC #6 synthetic evidence seal safety (NOT native proof)', () => {
       expect(lines[0]).toMatch(/^"/) // Tern scenario strings, not shell single quotes
       expect(lines[1]).toMatch(/^"/)
       expect(JSON.parse(lines[0]!)).toBe(filename) // surface-play file argument
+      // Tern's scenario parser documents literal Unicode and only \\", \\\\, \\n, \\t
+      // escapes; JSON's \\uXXXX form is not an advertised scenario escape.
+      expect(lines[0]).not.toMatch(/\\\\u[0-9a-f]{4}/i)
+      expect(lines[1]).not.toMatch(/\\\\u[0-9a-f]{4}/i)
       const shellWord = JSON.parse(lines[1]!) as string
       // Only a trusted synthetic filename is evaluated by the POSIX test shell.
       const roundTrip = spawnSync('sh', ['-c', 'printf %s ' + shellWord], {
