@@ -89,6 +89,8 @@ export class NativeTerminal implements Terminal {
   /** Prefix of durable transcript already admitted to the bounded terminal replay. */
   private replayCursor = 0
   private replayPermit = true
+  /** Focus is a wire op: avoid enqueuing it again on every ACK or token. */
+  private focusedId: string | undefined
   private readonly replayFrameBudget = 512 * 1024
   private readonly replayEntryLimit = 20 * 1024 * 1024
   private epoch = 0
@@ -121,6 +123,7 @@ export class NativeTerminal implements Terminal {
 
   private openSurface(): TernSurface {
     this.unlistenAcks?.()
+    this.focusedId = undefined
     const surface = this.session.open({
       id: this.surfaceId(), mode: 'inline', role: 'dsh.session', title: 'DeepSeek Harness',
     })
@@ -492,12 +495,14 @@ export class NativeTerminal implements Terminal {
     this.surface.render({ main, dock, layer })
     this.revision += 1
     // Focus only an actual editor/input node. Never issue focus to rows/text.
-    if (prompt && answerKind) {
-      this.surface.focus('layer.' + prompt.root + '.answer')
-    } else if (!prompt && editorKind) {
-      const path = ['dock', colKind ? 'composer' : '', rowKind ? 'line' : '', 'input']
-        .filter(Boolean).join('.')
-      this.surface.focus(path)
+    const focus = prompt && answerKind ? 'layer.' + prompt.root + '.answer'
+      : !prompt && editorKind
+        ? ['dock', colKind ? 'composer' : '', rowKind ? 'line' : '', 'input']
+          .filter(Boolean).join('.')
+        : undefined
+    if (focus !== this.focusedId) {
+      this.surface.focus(focus ?? null)
+      this.focusedId = focus
     }
     if (this.session.caps?.features.includes('settle') && this.surface.settle) {
       for (const entry of admitted) {
