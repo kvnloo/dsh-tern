@@ -273,7 +273,7 @@ scenario_quote() {
 import json,sys
 # Tern scenarios support literal UTF-8, \\", \\\\, \\n and \\t; not JSON \\u escapes.
 value=sys.argv[1]
-if any(ord(char)<32 and char not in ("\\n","\\t") for char in value):
+if any(ord(char)<32 and char not in ("\n","\t") for char in value):
  raise SystemExit("scenario path contains an unsupported control character")
 print(json.dumps(value,ensure_ascii=False))
 PY
@@ -286,7 +286,7 @@ run_quote() {
  python3 - "$1" <<'PY'
 import json,shlex,sys
 value=sys.argv[1]
-if any(ord(char)<32 and char not in ("\\n","\\t") for char in value):
+if any(ord(char)<32 and char not in ("\n","\t") for char in value):
  raise SystemExit("run path contains an unsupported control character")
 print(json.dumps(shlex.quote(value),ensure_ascii=False))
 PY
