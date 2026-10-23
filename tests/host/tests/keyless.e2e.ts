@@ -1,69 +1,295 @@
 /**
- * Keyless public dsh profile E2E: a deterministic LLM adapter, real Agent,
- * durable Session, Loader composition and ANSI terminal subprocess.
+ * Real published CLI / Loader / Agent / Session keyless conformance.
+ * The only synthetic participant is a model adapter and, in native tests,
+ * a terminal peer that sends real PTY bytes into @stencil-hq/tern.
  */
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execa } from 'execa'
 import { describe, expect, it } from 'vitest'
-import { resolveExampleLaunch } from '@deepseek-ai/dsh-loader-smoke'
+import { resolveExampleLaunch, resolveExampleMode } from '@deepseek-ai/dsh-loader-smoke'
 
 const root = fileURLToPath(new URL('../../../../../../', import.meta.url))
 const cli = fileURLToPath(new URL('../../../../src/bin.ts', import.meta.url))
 const config = fileURLToPath(new URL('../fixtures/cordis.yml', import.meta.url))
+const ptyDriver = fileURLToPath(new URL('../harness/pty_driver.py', import.meta.url))
 const tsconfig = fileURLToPath(new URL('../../../../../../tsconfig.json', import.meta.url))
-const launch = resolveExampleLaunch({ srcBin: cli, mode: 'src', sourceImport: 'tsx/esm', tsconfigPath: tsconfig })
 
-describe('shipped dsh tui profile: keyless real-Agent ANSI subprocess', () => {
-  it('submits two turns, handles an injected stream failure, and flushes its Session on exit', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'dsh-tui-real-profile-'))
-    const persisted = join(dir, 'sessions')
-    const child = execa(launch.command, [
-      ...launch.args, '--profile', 'tui', '--patch', config, '--no-native',
-    ], {
-      cwd: root,
-      env: {
-        ...launch.env,
-        DSH_HOME: join(dir, 'home'),
-        DSH_TUI_TEST_STORE: persisted,
-        DSH_TELEMETRY_DISABLED: '1',
-        DSH_PERMISSION_MODE: 'danger-full-access',
-        DEEPSEEK_API_KEY: '',
-        DEEPSEEK_BASE_URL: undefined,
-      },
-      timeout: 60_000, reject: false, killSignal: 'SIGKILL',
+const launch = resolveExampleLaunch({
+  srcBin: cli, mode: resolveExampleMode(), sourceImport: 'tsx/esm', tsconfigPath: tsconfig,
+})
+
+type Step =
+  | { wait: string; timeout_sec?: number }
+  | { write: string }
+  | { hex: string }
+  | { event: Record<string, unknown> }
+  | { osc877: Record<string, unknown> }
+  | { sleep_ms: number }
+  | { resize: [number, number] }
+  | { signal: 'SIGINT' | 'SIGTERM' | 'SIGHUP' }
+  | { eof: true }
+
+interface PtyResult {
+  readonly exit_code: number | null
+  readonly timed_out: boolean
+  readonly hello_sent: boolean
+  readonly acks: number
+  readonly output: string
+  readonly failure?: string
+}
+
+interface DurableRecord {
+  readonly type?: string
+  readonly id?: string
+  readonly data?: Record<string, unknown>
+}
+
+interface Durable {
+  readonly id: string
+  readonly events: readonly DurableRecord[]
+}
+
+function testEnvironment(privateDir: string): Record<string, string> {
+  const inherited = process.env
+  const keys = ['PATH', 'LANG', 'LC_ALL', 'SHELL', 'USER', 'TMPDIR', 'TZ']
+  const preserved = Object.fromEntries(keys.flatMap(key =>
+    inherited[key] === undefined ? [] : [[key, inherited[key]!]]))
+  return {
+    ...preserved,
+    ...Object.fromEntries(Object.entries(launch.env).filter(([key, value]) =>
+      value !== undefined && (key === 'TSX_TSCONFIG_PATH'))),
+    HOME: join(privateDir, 'home'),
+    XDG_CONFIG_HOME: join(privateDir, 'config'),
+    XDG_CACHE_HOME: join(privateDir, 'cache'),
+    DSH_HOME: join(privateDir, 'dsh'),
+    DSH_AGENTS_HOME: join(privateDir, 'agents'),
+    DSH_TUI_TEST_STORE: join(privateDir, 'sessions'),
+    DSH_TSP_RECORD: join(privateDir, 'metadata.jsonl'),
+    DSH_TSP_RECORD_FULL: join(privateDir, 'full-wire.jsonl'),
+    DSH_TELEMETRY_DISABLED: '1',
+    TERN_TSP: '1',
+    TERM: 'xterm-256color',
+  }
+}
+
+async function execute(
+  privateDir: string,
+  label: string,
+  mode: 'ansi' | 'native' | 'osc-hello' | 'da1' | 'late-hello',
+  steps: readonly Step[],
+  options: { shorthand?: boolean; sessionId?: string; timeoutSec?: number; nativeDisabled?: boolean } = {},
+): Promise<PtyResult> {
+  const args = options.shorthand ? ['tui'] : ['--profile', 'tui']
+  const command = [
+    ...launch.args, ...args, '--patch', config,
+    ...(options.nativeDisabled ? ['--no-native'] : []),
+    ...(options.sessionId ? ['--session-id', options.sessionId] : []),
+  ]
+  const specification = {
+    argv: [launch.command, ...command],
+    cwd: root,
+    env: testEnvironment(privateDir),
+    mode,
+    steps,
+    timeout_sec: options.timeoutSec ?? 65,
+    output_dir: join(privateDir, label),
+    auto_ack: true,
+  }
+  const result = await execa('python3', [ptyDriver], {
+    cwd: root,
+    input: JSON.stringify(specification),
+    env: testEnvironment(privateDir),
+    timeout: (options.timeoutSec ?? 65) * 1000 + 10_000,
+    killSignal: 'SIGKILL',
+    reject: false,
+  })
+  const failureContext = 'PTY driver ' + label + ' exited ' + String(result.exitCode)
+    + '; stderr=' + result.stderr + '; stdout=' + result.stdout
+  expect(result.timedOut, failureContext).toBe(false)
+  expect(result.exitCode, failureContext).toBe(0)
+  let response: PtyResult
+  try {
+    response = JSON.parse(result.stdout) as PtyResult
+  } catch (error) {
+    throw new Error(failureContext, { cause: error })
+  }
+  expect(response.failure, response.output).toBeUndefined()
+  expect(response.timed_out, response.output).toBe(false)
+  return response
+}
+
+async function durable(privateDir: string): Promise<Durable> {
+  const parent = join(privateDir, 'sessions')
+  const candidates = (await readdir(parent, { recursive: true }))
+    .filter(path => /^session(?:\.v[1-9]\d*)?\.jsonl$/.test(basename(path)))
+    .sort((a, b) => {
+      const version = (path: string): number =>
+        Number(basename(path).match(/^session\.v(\d+)\.jsonl$/)?.[1] ?? 0)
+      return version(b) - version(a)
     })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (chunk: Buffer) => { stdout += String(chunk) })
-    child.stderr.on('data', (chunk: Buffer) => { stderr += String(chunk) })
-    const waitFor = async (text: string): Promise<void> => {
-      const deadline = Date.now() + 25_000
-      while (!stdout.includes(text)) {
-        if (Date.now() > deadline) throw new Error('missing ' + text + '; stdout=' + stdout + '; stderr=' + stderr)
-        await new Promise(resolve => setTimeout(resolve, 20))
-      }
-    }
+  expect(candidates.length, 'no physical JSONL Session log in ' + parent).toBeGreaterThan(0)
+  const lines = (await readFile(join(parent, candidates[0]!), 'utf8'))
+    .trim().split('\n').map(line => JSON.parse(line) as DurableRecord)
+  expect(lines[0]).toMatchObject({ type: 'session' })
+  const id = lines[0]?.id
+  expect(typeof id).toBe('string')
+  return { id: id!, events: lines.slice(1) }
+}
+
+function content(blocks: unknown): string {
+  if (!Array.isArray(blocks)) return ''
+  return blocks.flatMap(block => {
+    if (block === null || typeof block !== 'object') return []
+    const value = block as { type?: string; text?: string }
+    return value.type === 'text' && typeof value.text === 'string' ? [value.text] : []
+  }).join('')
+}
+
+function users(log: Durable): string[] {
+  return log.events.flatMap(event => {
+    if (event.type !== 'user/message') return []
+    const data = event.data
+    if (!data || typeof data['source'] !== 'object' || data['source'] === null) return []
+    if ((data['source'] as { kind?: string }).kind !== 'user') return []
+    return [content(data['content'])]
+  })
+}
+
+function assistants(log: Durable): string[] {
+  return log.events.flatMap(event => {
+    if (event.type !== 'assistant/message') return []
+    const message = event.data?.['message']
+    if (!message || typeof message !== 'object') return []
+    return [content((message as { content?: unknown }).content)]
+  })
+}
+
+describe.skipIf(process.platform !== 'linux')('RFC #6 keyless shipped CLI through native Linux PTY', () => {
+  it('persists two real Agent turns, never commits a failed stream and resumes across processes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-tui-durable-'))
+    await chmod(dir, 0o700)
     try {
-      await waitFor('dsh TUI (ANSI)')
-      child.stdin.write('alpha\n')
-      await waitFor('[dsh] echo: alpha')
-      child.stdin.write('beta\n')
-      await waitFor('[dsh] echo: beta')
-      child.stdin.write('[failure]\n')
-      await waitFor('intentional keyless fixture stream failure')
-      child.stdin.write('/quit\n')
-      const result = await child
-      expect(result.exitCode, stderr).toBe(0)
-      expect(stdout).toContain('[you] alpha')
-      expect(stdout).toContain('[you] beta')
-      const paths = await readdir(persisted, { recursive: true })
-      expect(paths.some(path => path.endsWith('.jsonl'))).toBe(true)
+      const first = await execute(dir, 'ansi-first', 'ansi', [
+        { wait: 'dsh TUI (ANSI)' },
+        { write: 'alpha\r' }, { wait: '[dsh] echo: alpha' },
+        { write: 'beta\r' }, { wait: '[dsh] echo: beta' },
+        { write: '[failure]\r' },
+        { wait: 'intentional keyless fixture stream failure' },
+        { write: '/quit\r' },
+      ], { nativeDisabled: true })
+      expect(first.exit_code, first.output).toBe(0)
+      const initial = await durable(dir)
+      expect(users(initial)).toEqual(['alpha', 'beta', '[failure]'])
+      expect(assistants(initial)).toEqual(['echo: alpha', 'echo: beta'])
+      expect(initial.events.some(event => event.type === 'turn/end')).toBe(true)
+      expect(JSON.stringify(initial.events)).not.toContain('speculative, must not commit')
+
+      const resumed = await execute(dir, 'ansi-resume', 'ansi', [
+        { wait: 'dsh TUI (ANSI)' },
+        { wait: '[you] alpha' },
+        { wait: '[dsh] echo: beta' },
+        { write: 'gamma\r' }, { wait: '[dsh] echo: gamma' },
+        { write: '/quit\r' },
+      ], { shorthand: true, nativeDisabled: true, sessionId: initial.id })
+      expect(resumed.exit_code, resumed.output).toBe(0)
+      const after = await durable(dir)
+      expect(after.id).toBe(initial.id)
+      expect(users(after)).toEqual(['alpha', 'beta', '[failure]', 'gamma'])
+      expect(assistants(after)).toEqual(['echo: alpha', 'echo: beta', 'echo: gamma'])
+      expect(after.events.length).toBeGreaterThan(initial.events.length)
     } finally {
-      child.kill('SIGKILL')
-      await child.catch(() => {})
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 160_000)
+
+  it('routes raw multi-key packets, split UTF-8, delete/move and bracketed multiline paste through the REAL SDK into one durable input', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-tui-raw-keys-'))
+    await chmod(dir, 0o700)
+    try {
+      const result = await execute(dir, 'native-raw', 'native', [
+        { wait: '\x1b_tsp;o;' },
+        { write: 'xyzQ' },
+        { hex: '1b5b44' },
+        { hex: '1b5b337e' },
+        { hex: 'f09f' }, { hex: '9880' },
+        { hex: '1b5b3230307e' },
+        { write: '\nsecond line' },
+        { hex: '1b5b3230317e' },
+        { hex: '0d' },
+        { wait: 'echo: xyz' },
+        { event: {
+          ev: 'send', sf: 'dsh', id: 'dock.composer.line.input',
+          text: 'atomic\nsend',
+        } },
+        { wait: 'echo: atomic' },
+        { write: '/quit\r' },
+      ])
+      expect(result.exit_code, result.output).toBe(0)
+      expect(result.hello_sent).toBe(true)
+      expect(result.acks).toBeGreaterThan(0)
+      const persisted = await durable(dir)
+      expect(users(persisted)).toEqual(['xyz😀\nsecond line', 'atomic\nsend'])
+      expect(assistants(persisted)).toEqual([
+        'echo: xyz😀\nsecond line', 'echo: atomic\nsend',
+      ])
+      expect(users(persisted).filter(text => text === 'xyz😀\nsecond line')).toHaveLength(1)
+      expect(users(persisted).filter(text => text === 'atomic\nsend')).toHaveLength(1)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 130_000)
+
+  it('falls back to real ANSI when Tern answers DA1 first or when native is explicitly disabled', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-tui-da1-'))
+    await chmod(dir, 0o700)
+    try {
+      const da1 = await execute(dir, 'da1-first', 'late-hello', [
+        { wait: 'dsh TUI (ANSI)' },
+        { write: 'fallback\r' },
+        { wait: '[dsh] echo: fallback' },
+        { write: '/quit\r' },
+      ])
+      expect(da1.exit_code, da1.output).toBe(0)
+      expect(users(await durable(dir))).toEqual(['fallback'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 100_000)
+
+  it('restores terminal ownership after a real protocol error and exits nonzero', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-tui-fault-'))
+    await chmod(dir, 0o700)
+    try {
+      const failed = await execute(dir, 'native-error', 'native', [
+        { wait: '\x1b_tsp;o;' },
+        { event: { ev: 'error', sf: 'dsh', msg: 'injected PTY surface failure' } },
+        { wait: 'injected PTY surface failure' },
+      ])
+      expect(failed.exit_code, failed.output).toBe(1)
+      expect(failed.output).toContain('\x1b[?2004l')
+      expect(failed.output).toContain('\x1b[<u')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 100_000)
+
+  it('handles ANSI PTY EOF and native SIGTERM without leaving the terminal held', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-tui-terminal-end-'))
+    await chmod(dir, 0o700)
+    try {
+      const eof = await execute(dir, 'ansi-eof', 'ansi', [
+        { wait: 'dsh TUI (ANSI)' }, { eof: true },
+      ], { nativeDisabled: true, timeoutSec: 15 })
+      expect(eof.exit_code, eof.output).toBe(0)
+      const signalled = await execute(dir, 'native-term', 'native', [
+        { wait: '\x1b_tsp;o;' }, { signal: 'SIGTERM' },
+      ], { timeoutSec: 15 })
+      expect(signalled.exit_code, signalled.output).toBe(0)
+      expect(signalled.output).toContain('\x1b[?2004l')
+    } finally {
       await rm(dir, { recursive: true, force: true })
     }
   }, 90_000)
