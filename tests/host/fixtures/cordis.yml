@@ -18,3 +18,7 @@
 - insert:
     - id: tui-fixture-llm
       name: './tui-llm.ts'
+    - id: tui-fixture-tools
+      name: './tui-tools.ts'
+    - id: tui-fixture-questions
+      name: '@deepseek-ai/dsh-tool-ask-user'
