@@ -67,8 +67,8 @@ function startup(app: string): Event[] {
     { dir: 'out', verb: 'o', body: { sf: app, mode: 'inline' } },
     { dir: 'out', verb: 'f', body: {
       sf: app, s: 1, ops: [
-        // First add's region is deliberately NOT the real semantic node ID.
-        ['add', 'main', 'start', null, {
+        // The public SDK op's ID must equal the actual node.id, under surface root.
+        ['add', app + '.root', app, null, {
           id: app + '.root', k: 'col', c: [
             { id: app + '.message', k: 'text', p: { text: 'Ready' } },
             { id: app + '.editor', k: 'editor', p: { text: '' } },
@@ -235,7 +235,7 @@ describe('RFC #6 synthetic startup protocol validator (NOT parity proof)', () =>
       { dir: 'out', verb: 'f', body: { sf: 'hermes', s: 2, ops: [
         ['set', 'hermes.message', { text: 'Updated' }],
         ['splice', 'hermes.message', 0, 0, 'Start '],
-        ['move', 'hermes.editor', 'main', null],
+        ['move', 'hermes.editor', 'hermes.root', null],
         ['reveal', 'hermes.editor', 'nearest'],
         ['scroll', 'hermes.editor', 'end'],
         ['settle', 'hermes.message'],
@@ -259,7 +259,10 @@ describe('RFC #6 synthetic startup protocol validator (NOT parity proof)', () =>
       ['focus', {}], ['focus', null, 'extra'],
       ['set', 'hermes.message'], ['set', 'hermes.message', null],
       ['splice', 'hermes.message', -1, 0, '!'],
-      ['move', 'hermes.editor', 'main', 17],
+      ['move', 'hermes.editor', 'hermes.root', 17],
+      ['add', 'other', 'hermes', null, { id: 'mismatched', k: 'text' }],
+      ['reveal', 'hermes.message', 'bottom'],
+      ['scroll', 'hermes.editor', 'wrong-direction'],
       ['scroll', 'hermes.editor', null],
       ['suspend', 'extra'], ['resume', null],
       ['props', 'hermes.message', { text: 'not an SDK opcode' }],
@@ -520,6 +523,7 @@ describe('RFC #6 synthetic evidence seal safety (NOT native proof)', () => {
       '/tmp/path with spaces/replay witness.jsonl',
       '/tmp/quote "double" and ' + "'single'" + '/file.jsonl',
       '/tmp/back\\slash/$(false) $HOME/replay.jsonl',
+      '/tmp/Unicode α😀 and spaces/replay.jsonl',
     ]) {
       // Execute only the extracted production encoding helpers. No Tern, Sway,
       // DSH, provider, user command or arbitrary fragment is launched.
