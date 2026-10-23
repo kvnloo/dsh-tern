@@ -60,6 +60,7 @@ function assertRootSession(
 function* readEvents(session: Session): Generator<SessionEvent> {
   for (let seq = 0; seq < session.seq; seq++) {
     // Existing Session history; the query above validates before write adoption.
+    // oxlint-disable-next-line typescript/no-deprecated -- Durable Session replay API pending projection migration.
     const event = session.eventAt(SessionSeq(seq))
     if (!event) throw new Error('missing persisted session event ' + seq)
     yield event
