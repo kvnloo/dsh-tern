@@ -58,13 +58,13 @@ Full SDK JSONL contains private prompts/output and stays only in the owner-only 
 ## Replay is NOT a live program
 
 ~~~sh
-bash apps/cli/tests/profiles/tui/harness/private_tern.sh replay /absolute/private/dsh-sdk-wire.jsonl
+bash apps/cli/tests/profiles/tui/harness/private_tern.sh replay "/absolute/private/path with spaces/dsh-sdk-wire.jsonl"
 python3 apps/cli/tests/profiles/tui/harness/evidence_bundle.py \
   --evidence-dir /tmp/PRIVATE_REPLAY_EVIDENCE \
   --out /tmp/dsh-replay-only.tar.gz
 ~~~
 
-Tern `ctl surface-play` expects a **scenario double-quoted string** (with supported JSON-style escapes) for the decoded filename; it does **not** strip POSIX single-quoted `shlex.quote` path literals. The harness encodes the filename only for the scenario layer. For `ctl run`, the scenario parser first strips that layer and its result is executed by the pane shell: the harness first builds a `shlex.quote`-safe executable word, then double-quotes/escapes the whole shell command for the scenario parser. This covers spaces, backslashes and quotes in the owned launcher, log pane and replay paths without evaluating arbitrary user fragments. The synthetic quoting unit test runs the actual isolated helpers and verifies their call sites; it is **not** a native Tern run.
+Tern `ctl surface-play` expects a **scenario double-quoted string** (literal UTF-8 and only supported `\\"`, `\\\\`, `\\n`, `\\t` escapes; no JSON `\\uXXXX` decoding) for the decoded filename; it does **not** strip POSIX single-quoted `shlex.quote` path literals. The harness encodes the filename only for the scenario layer. For `ctl run`, the scenario parser first strips that layer and its result is executed by the pane shell: the harness first builds a `shlex.quote`-safe executable word, then double-quotes/escapes the whole shell command for the scenario parser. This covers spaces, backslashes and quotes in the owned launcher, log pane and replay paths without evaluating arbitrary user fragments. The synthetic quoting unit test runs the actual isolated helpers and verifies their call sites; it is **not** a native Tern run.
 
 Replay uses Tern `surface-play` rather than starting dsh; `source_kind` stays `surface-replay`. A complete recording may have removed its live composer after `out/x`; replay readiness therefore requires retained main semantic identities/state rather than a dock. If the terminal has no retained main state, refuse; for subrange inspection use Tern's documented `surface-play` range option, explicitly record any cutoff and NEVER relabel the shortened replay as a complete live run. Replay does not prove process startup, Session model/services, input parsing, TTY cleanup or Hermes parity.
 
