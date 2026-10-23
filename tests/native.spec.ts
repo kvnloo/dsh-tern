@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { node } from '@stencil-hq/tern'
 import {
   NativeTerminal, type TernInput, type TernSDK, type TernSession, type TernSurface,
 } from '../src/native.ts'
@@ -8,6 +9,7 @@ interface Node {
   kind: string
   props: Record<string, unknown>
   children: unknown[]
+  handlers?: Record<string, unknown>
 }
 function collect(value: unknown, kind: string): Node[] {
   if (value === null || typeof value !== 'object' || !('kind' in value)) return []
@@ -22,7 +24,7 @@ function fixture() {
   const idle = new Promise<void>(resolve => { finish = resolve })
   const sdk: TernSDK = {
     connect: async () => null,
-    node: (kind, props, children = []) => ({ kind, props, children }),
+    node,
   }
   const session: TernSession = {
     open(options): TernSurface {
@@ -49,7 +51,7 @@ describe('native inline Tern UI public SDK', () => {
     f.terminal.update(snapshot)
     const latest = f.frames.at(-1)!
     expect(f.opens).toEqual(['dsh'])
-    expect(latest.main.flatMap(node => collect(node, 'md'))[0]?.children).toEqual(['committed answer'])
+    expect(latest.main.flatMap(node => collect(node, 'md'))[0]?.props.text).toBe('committed answer')
     const editors = latest.dock.flatMap(node => collect(node, 'editor'))
     expect(editors).toHaveLength(1)
     expect(editors[0]?.props).toMatchObject({ sendable: true, text: '' })
@@ -57,20 +59,20 @@ describe('native inline Tern UI public SDK', () => {
     expect(f.isClosed()).toBe(true)
   })
 
-  it('accepts native edits, rejecting stale send before submit', async () => {
+  it('accepts native edits and treats send as an atomic supplied value', async () => {
     const f = fixture()
     const submitted: string[] = []
     await f.terminal.start(text => submitted.push(text), () => {}, () => {})
     f.terminal.update(snapshot)
     const editor = f.frames.at(-1)!.dock.flatMap(node => collect(node, 'editor'))[0]!
-    const onEdit = editor.props.onEdit as (e: unknown) => void
+    const onEdit = editor.handlers?.onEdit as (e: unknown) => void
     onEdit({ from: 0, to: 0, text: 'hello', cursor: 5, len: 0 })
     const current = f.frames.at(-1)!.dock.flatMap(node => collect(node, 'editor'))[0]!
-    const onSend = current.props.onSend as (e: { text: string }) => void
+    const onSend = current.handlers?.onSend as (e: { text: string }) => void
     onSend({ text: 'stale' })
-    expect(submitted).toEqual([])
+    expect(submitted).toEqual(['stale'])
     onSend({ text: 'hello' })
-    expect(submitted).toEqual(['hello'])
+    expect(submitted).toEqual(['stale', 'hello'])
     await f.terminal.closed()
   })
 
@@ -83,7 +85,7 @@ describe('native inline Tern UI public SDK', () => {
     write({ from: 0, to: 0, text: 'unsent draft', cursor: 12, len: 0 })
     const answer = f.terminal.ask({ title: 'Describe' })
     const input = f.frames.at(-1)!.layer.flatMap(node => collect(node, 'editor'))[0]!
-    const onEdit = input.props.onEdit as (e: unknown) => void
+    const onEdit = input.handlers?.onEdit as (e: unknown) => void
     onEdit({ from: 0, to: 0, text: 'response', cursor: 8, len: 0 })
     const current = f.frames.at(-1)!.layer.flatMap(node => collect(node, 'editor'))[0]!
     const onSend = current.props.onSend as (e: { text: string }) => void
@@ -103,7 +105,7 @@ describe('native inline Tern UI public SDK', () => {
     ] })
     const buttons = f.frames.at(-1)!.layer.flatMap(node => collect(node, 'button'))
     expect(buttons).toHaveLength(2)
-    const onClick = buttons[1]?.props.onClick as () => void
+    const onClick = buttons[1]?.handlers?.onClick as () => void
     onClick()
     expect(await answer).toBe('rejected')
     expect(f.frames.at(-1)!.layer).toHaveLength(0)
