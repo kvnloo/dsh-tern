@@ -18,8 +18,8 @@ import { createRequire } from 'node:module'
 import { ConptyPeer, GateFailure, requireGate } from './conpty-peer.mjs'
 
 const require = createRequire(import.meta.url)
-const pty = require('node-pty')
-const ptyPackage = require('node-pty/package.json')
+let pty
+let ptyPackage
 const root = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const pluginName = '@kvnloo/dsh-tern'
 const expectedHost = '5badb15009ae1756c3afe0ae0cef1faafc290ccc'
@@ -51,7 +51,9 @@ function step(name, fn) {
   phase = name
   evidence.phase = name
   return Promise.resolve().then(fn).then(result => {
-    cases.push({ name, status: 'PASS', ...result })
+    const publicResult = { ...(result ?? {}) }
+    delete publicResult.sessionId // Never publish the physical private Session identifier.
+    cases.push({ name, status: 'PASS', ...publicResult })
     return result
   })
 }
@@ -70,6 +72,8 @@ function sha256(file) {
 }
 
 function backendCheck() {
+  pty = require('node-pty')
+  ptyPackage = require('node-pty/package.json')
   requireGate(process.platform === 'win32', 'gate requires actual process.platform win32')
   requireGate(Number(process.versions.node.split('.')[0]) >= 24, 'Node >=24 required')
   requireGate(ptyPackage.version === '1.1.0', 'pinned node-pty 1.1.0 is required')
@@ -414,6 +418,37 @@ async function disabledNative(sandbox) {
   } finally { peer.dispose() }
 }
 
+async function nativeErrorRecovery(sandbox) {
+  // A genuine SDK error is injected into the original OS ConPTY, then a new
+  // ConPTY child proves that the dead pane did not own the host profile.
+  const failed = launch(sandbox)
+  let crashExit
+  try {
+    await waitNative(failed)
+    failed.sendOsc877('e', {
+      ev: 'error', sf: 'dsh', msg: 'injected ConPTY surface failure',
+    })
+    await failed.waitForExit(25_000)
+    requireGate(Number.isInteger(failed.exit.code) && failed.exit.code !== 0,
+      'real ConPTY protocol failure must exit nonzero')
+    requireGate(failed.output.includes('\\x1b[?2004l'.replace('\\', '\\')),
+      'failure did not restore bracketed paste')
+    crashExit = failed.exit.code
+  } finally { failed.dispose() }
+
+  const recovered = launch(sandbox)
+  try {
+    await waitNative(recovered)
+    const before = recovered.frames.length
+    recovered.write('new-child-after-error\\r'.replace('\\r', '\r'))
+    await waitNode(recovered, { contains: 'echo: new-child-after-error' },
+      'reopened child after native SDK failure', before)
+    await finishNative(recovered)
+    return { crashExitCode: crashExit, recoveryExitCode: recovered.exit.code,
+      transport: recovered.stats() }
+  } finally { recovered.dispose() }
+}
+
 function safeFailure(error) {
   if (error instanceof GateFailure) return error.message
   const code = typeof error?.code === 'string' ? error.code : 'unclassified'
@@ -432,6 +467,13 @@ try {
     () => nativeOne(main))
   await step('native-persistent-session-restart-and-surface-recovery',
     () => nativeResume(main, first.sessionId))
+  const errorRecovery = privateWorkspace('error-recovery')
+  await step('packed-real-plugin-manager-error-recovery-profile', () => {
+    installPlugin(errorRecovery)
+    return { installedThroughRealHost: true }
+  })
+  await step('native-os-conpty-protocol-error-and-fresh-child', () =>
+    nativeErrorRecovery(errorRecovery))
   const fallback = privateWorkspace('fenced')
   await step('packed-real-plugin-manager-fallback-profile', () => {
     installPlugin(fallback)
