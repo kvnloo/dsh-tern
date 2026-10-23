@@ -84,9 +84,11 @@ function backendCheck() {
     || implementation.includes('loadNativeModule("conpty")'),
   'node-pty installed Windows backend does not explicitly load native ConPTY')
   requireGate(implementation.includes('startProcess('), 'node-pty native ConPTY startProcess missing')
-  requireGate(!implementation.includes("loadNativeModule('winpty')")
-    && !implementation.includes('loadNativeModule("winpty")'),
-  'WinPTY fallback is prohibited in this gate')
+  // Published v1.1.0 contains a WinPTY fallback. It is not a permitted
+  // backend for this gate: each spawned instance must prove _useConpty=true.
+  requireGate(implementation.includes("loadNativeModule('pty')")
+    && implementation.includes('if (this._useConpty)'),
+  'pinned node-pty 1.1.0 ConPTY/WinPTY selector changed')
   const build = Number(release().split('.').at(-1))
   requireGate(Number.isInteger(build) && build >= 18309, 'Windows build does not qualify for OS ConPTY')
   const commit = gitHead(root)
@@ -163,11 +165,17 @@ function isolatedEnv(sandbox) {
 }
 
 function spawnConsole(command, argv, sandbox) {
-  return pty.spawn(command, argv, {
+  const terminal = pty.spawn(command, argv, {
     name: 'xterm-256color', cols: 100, rows: 28,
     cwd: sandbox.workspace, env: isolatedEnv(sandbox),
     useConpty: true, useConptyDll: false,
   })
+  // v1.1.0's published WindowsTerminal owns WindowsPtyAgent._useConpty.
+  // Assert the *actual spawned* native backend, never mere platform claims.
+  requireGate(terminal?._agent?._useConpty === true
+    && terminal._agent._useConptyDll === false,
+  'spawned Windows pseudoterminal was not OS ConPTY (WinPTY is forbidden)')
+  return terminal
 }
 
 function cliArgs(extra = []) {
