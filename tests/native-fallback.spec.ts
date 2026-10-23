@@ -62,17 +62,17 @@ describe('native capability fallback and input isolation', () => {
   })
 
   it('rejects queued previous-question handler callbacks by request instance', async () => {
-    const f = fixture(['card', 'text', 'button', 'input', 'row', 'col'])
+    const f = fixture(['card', 'text', 'el', 'input', 'row', 'col'])
     f.term.update(snapshot)
-    const old = f.term.ask({ title: 'First?', choices: [{ label: 'No', value: 'no' }] })
-    const first = f.latest().layer.flatMap(flatten).find(item => item.kind === 'button')
+    const old = f.term.ask({ id: 'test.first', title: 'First?', choices: [{ label: 'No', value: 'no' }] })
+    const first = f.latest().layer.flatMap(flatten).find(item => item.kind === 'el')
     const stale = first?.handlers?.onClick as (() => void) | undefined
     expect(stale).toBeTypeOf('function')
     stale?.()
     expect(await old).toBe('no')
-    const fresh = f.term.ask({ title: 'Second?', choices: [{ label: 'Yes', value: 'yes' }] })
+    const fresh = f.term.ask({ id: 'test.second', title: 'Second?', choices: [{ label: 'Yes', value: 'yes' }] })
     stale?.()
-    const second = f.latest().layer.flatMap(flatten).find(item => item.kind === 'button')
+    const second = f.latest().layer.flatMap(flatten).find(item => item.kind === 'el')
     expect(f.latest().layer.length).toBeGreaterThan(0)
     ;(second?.handlers?.onClick as () => void)()
     expect(await fresh).toBe('yes')

@@ -51,13 +51,16 @@ class Output implements TermOutput {
     return value
   }
 
-  answerId(): string | undefined {
+  private findId(kind: 'answer' | 'choice'): string | undefined {
     const visit = (value: unknown): string | undefined => {
       if (value === null || typeof value !== 'object') return
       const candidate = value as Record<string, unknown>
       const id = candidate['id']
+      const props = candidate['p'] as Record<string, unknown> | undefined
+      const isAnswer = candidate['k'] === 'editor' || candidate['k'] === 'input'
+      const isChoice = candidate['k'] === 'el' && props?.['tag'] === 'button'
       if (typeof id === 'string' && id.startsWith('layer.')
-        && (candidate['k'] === 'editor' || candidate['k'] === 'input')) return id
+        && (kind === 'answer' ? isAnswer : isChoice)) return id
       const children = candidate['c']
       if (Array.isArray(children)) {
         for (const child of children) {
@@ -80,11 +83,14 @@ class Output implements TermOutput {
     }
     return
   }
+  answerId(): string | undefined { return this.findId('answer') }
+  choiceId(): string | undefined { return this.findId('choice') }
+
 }
 
 const hello = {
   r: 'hello', v: 1, term: 'tern', ver: '0.1.0',
-  kinds: ['col', 'row', 'text', 'card', 'md', 'editor', 'input', 'button'],
+  kinds: ['col', 'row', 'text', 'card', 'md', 'editor', 'input', 'el'],
   features: ['edit', 'send', 'undo', 'settle'], credits: 32, apc: 8192,
   cols: 92, cell: { w: 9, h: 18 }, dark: true, reduceMotion: false,
 }
@@ -171,7 +177,7 @@ describe('native TUI real 0.1.0 SDK / PTY / composer', () => {
       f.push('unsent work')
       await vi.waitFor(() => expect(f.output.editorText()).toBe('unsent work'))
       const decision = f.terminal.ask({
-        title: 'Allow once?', choices: [
+        id: 'test.allow-once', title: 'Allow once?', choices: [
           { label: 'Allow once', value: 'allowed-once' },
           { label: 'Deny', value: 'rejected' },
         ],
@@ -257,7 +263,7 @@ describe('native TUI real 0.1.0 SDK / PTY / composer', () => {
     const controller = new AbortController()
     try {
       const old = f.terminal.ask({
-        title: 'First approval', signal: controller.signal,
+        id: 'approval.same-logical-call', title: 'First approval', signal: controller.signal,
         choices: [{ label: 'Allow first', value: 'allowed-once' }],
       })
       const oldId = f.output.answerId()
@@ -266,11 +272,12 @@ describe('native TUI real 0.1.0 SDK / PTY / composer', () => {
       expect(await old).toBeNull()
 
       const fresh = f.terminal.ask({
-        title: 'Replacement approval',
+        id: 'approval.same-logical-call', title: 'Replacement approval',
         choices: [{ label: 'Allow second', value: 'allowed-once' }],
       })
       const freshId = f.output.answerId()
       if (!freshId) throw new Error('Replacement approval editor missing from emitted document')
+      expect(freshId).not.toBe(oldId)
       let answered = false
       void fresh.then(() => { answered = true })
 
@@ -282,6 +289,58 @@ describe('native TUI real 0.1.0 SDK / PTY / composer', () => {
 
       f.event({ ev: 'send', sf: 'dsh', id: freshId, text: 'allowed-once' })
       expect(await fresh).toBe('allowed-once')
+    } finally {
+      await f.close()
+    }
+  })
+
+  it('rejects stale edit/undo/send/focus/ACTION on same-ID reopened safety; accepts the new action', async () => {
+    const f = await fixture()
+    const controller = new AbortController()
+    try {
+      f.push('unsent draft')
+      await vi.waitFor(() => expect(f.output.editorText()).toBe('unsent draft'))
+      const old = f.terminal.ask({
+        id: 'approval.reopen-call', title: 'First attempt',
+        signal: controller.signal,
+        choices: [{ label: 'Reject first', value: 'rejected' }],
+      })
+      const oldEditor = f.output.answerId()
+      const oldChoice = f.output.choiceId()
+      if (!oldEditor || !oldChoice) throw new Error('Old semantic editor/action not rendered')
+      controller.abort()
+      expect(await old).toBeNull()
+
+      const fresh = f.terminal.ask({
+        id: 'approval.reopen-call', title: 'Replacement attempt',
+        choices: [{ label: 'Reject second', value: 'rejected' }],
+      })
+      const freshEditor = f.output.answerId()
+      const freshChoice = f.output.choiceId()
+      if (!freshEditor || !freshChoice) throw new Error('New semantic editor/action not rendered')
+      expect(freshEditor).not.toBe(oldEditor)
+      expect(freshChoice).not.toBe(oldChoice)
+      let answered = false
+      void fresh.then(() => { answered = true })
+
+      f.event({ ev: 'edit', sf: 'dsh', id: oldEditor, from: 0, to: 0, text: 'bad', cursor: 3, len: 0 })
+      f.event({ ev: 'undo', sf: 'dsh', id: oldEditor })
+      f.event({ ev: 'focus', sf: 'dsh', id: oldEditor })
+      f.event({ ev: 'send', sf: 'dsh', id: oldEditor, text: 'allowed-once' })
+      f.event({ ev: 'action', sf: 'dsh', id: oldChoice, act: 'click' })
+      const drained = Promise.withResolvers<void>()
+      setImmediate(drained.resolve)
+      await drained.promise
+      expect(answered).toBe(false)
+      expect(f.submitted).toEqual([])
+
+      // These are real encoded TSP events through the published SDK dispatcher.
+      f.event({ ev: 'action', sf: 'dsh', id: freshChoice, act: 'click' })
+      expect(await fresh).toBe('rejected')
+      expect(f.submitted).toEqual([])
+      expect(f.output.editorText()).toBe('unsent draft')
+      f.push('\r')
+      await vi.waitFor(() => expect(f.submitted).toEqual(['unsent draft']))
     } finally {
       await f.close()
     }

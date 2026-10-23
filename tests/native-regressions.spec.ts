@@ -18,7 +18,7 @@ function terminalFixture() {
   const surfaces: TernSurface[] = []
   const settled: string[] = []
   const session: TernSession = {
-    caps: { kinds: ['card', 'md', 'editor', 'input', 'text', 'row', 'col', 'button'], features: ['settle'] },
+    caps: { kinds: ['card', 'md', 'editor', 'input', 'text', 'row', 'col', 'el'], features: ['settle'] },
     open(): TernSurface {
       const surface: TernSurface = {
         closed: false,

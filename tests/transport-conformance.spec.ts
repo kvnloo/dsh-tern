@@ -37,7 +37,7 @@ class PtyOutput implements TermOutput {
 
 const hello = {
   r: 'hello', v: 1, term: 'tern', ver: '0.1.0',
-  kinds: ['text', 'col', 'row', 'card', 'md', 'editor', 'input', 'button'],
+  kinds: ['text', 'col', 'row', 'card', 'md', 'editor', 'input', 'el'],
   features: ['edit', 'send', 'undo', 'settle'],
   credits: 1, apc: 4096, cols: 100, cell: { w: 8, h: 16 },
   dark: true, reduceMotion: false,

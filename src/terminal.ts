@@ -6,6 +6,8 @@ export interface Choice {
   readonly value: string
 }
 export interface Ask {
+  /** Logical owner from the public approval/tool-call, question or picker request. */
+  readonly id: string
   readonly title: string
   readonly detail?: string
   readonly choices?: readonly Choice[]

@@ -219,10 +219,10 @@ async function run(ctx: Context, config: Config): Promise<void> {
     }
 
     const choose = async (
-      title: string, choices: readonly { label: string; value: string }[],
+      id: string, title: string, choices: readonly { label: string; value: string }[],
     ): Promise<string | null> => {
       if (choices.length === 0) throw new Error(title + ': no candidates from the owning service')
-      return display.ask({ title, choices: [...choices] })
+      return display.ask({ id, title, choices: [...choices] })
     }
     const commands = async (raw: string): Promise<void> => {
       const text = raw.trim()
@@ -242,7 +242,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
       }
       if (text === '/model' || text === '/models') {
         const options = await products.modelChoices()
-        const chosen = await choose('Choose a model', options.map(option => ({
+        const chosen = await choose('picker.model', 'Choose a model', options.map(option => ({
           label: option.label, value: option.id,
         })))
         if (!chosen) return
@@ -256,7 +256,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
       if (text === '/sessions') {
         const options = (await products.rootSessions(cwd))
           .filter(choice => choice.persisted && choice.id !== agent.id)
-        const chosen = await choose('Resume an existing root session', options.map(choice => ({
+        const chosen = await choose('picker.session', 'Resume an existing root session', options.map(choice => ({
           label: choice.label, value: String(choice.id),
         })))
         if (chosen) await switchSession(brandString<SessionId>(chosen), false)
@@ -345,6 +345,8 @@ async function run(ctx: Context, config: Config): Promise<void> {
       if (request.agent !== agent) return next()
       const detail = request.displayReason?.en ?? request.reason
       const answer = await display.ask({
+        // ApprovalRequestEvent exposes callId, not the audit ApprovalRequestId.
+        id: 'approval:' + String(request.callId ?? randomUUID()),
         title: 'Allow once: ' + request.toolName + '?',
         ...(detail === undefined ? {} : { detail }),
         choices: [
@@ -360,6 +362,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
       const answers = []
       for (const question of request.questions) {
         const answer = await display.ask({
+          id: 'question:' + String(request.wait?.callId ?? 'untimed') + ':' + question.id,
           title: question.header ? question.header + ': ' + question.question : question.question,
           ...(question.detail === undefined ? {} : { detail: question.detail }),
           ...(question.options === undefined ? {} : { choices: question.options.map(option => ({

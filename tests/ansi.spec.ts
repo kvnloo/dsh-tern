@@ -39,7 +39,7 @@ describe('ANSI fallback does not require a Tern SDK', () => {
     const received: string[] = []
     await f.terminal.start(value => received.push(value), () => {}, () => {})
     const answer = f.terminal.ask({
-      title: 'Allow?', choices: [
+      id: 'test.allow', title: 'Allow?', choices: [
         { label: 'Allow once', value: 'allowed-once' },
         { label: 'Deny', value: 'rejected' },
       ],
@@ -59,7 +59,7 @@ describe('ANSI fallback does not require a Tern SDK', () => {
     f.stdin.write('unsent')
     await new Promise(resolve => setImmediate(resolve))
     const answer = f.terminal.ask({
-      title: 'Allow?', choices: [
+      id: 'test.allow', title: 'Allow?', choices: [
         { label: 'Allow once', value: 'allowed-once' },
         { label: 'Deny', value: 'rejected' },
       ],
@@ -80,7 +80,7 @@ describe('ANSI fallback does not require a Tern SDK', () => {
     f.stdin.write('\x1b[D')
     await new Promise(resolve => setImmediate(resolve))
     const answer = f.terminal.ask({
-      title: 'Allow?', choices: [{ label: 'Deny', value: 'rejected' }],
+      id: 'test.allow', title: 'Allow?', choices: [{ label: 'Deny', value: 'rejected' }],
     })
     f.stdin.write('1\r')
     expect(await answer).toBe('rejected')
@@ -97,7 +97,7 @@ describe('ANSI fallback does not require a Tern SDK', () => {
     f.stdin.write('\x01\x1b[C')
     await new Promise(resolve => setImmediate(resolve))
     const answer = f.terminal.ask({
-      title: 'Allow?', choices: [{ label: 'Deny', value: 'rejected' }],
+      id: 'test.allow', title: 'Allow?', choices: [{ label: 'Deny', value: 'rejected' }],
     })
     f.stdin.write('1\r')
     expect(await answer).toBe('rejected')
@@ -113,7 +113,7 @@ describe('ANSI fallback does not require a Tern SDK', () => {
     f.stdin.write('before')
     await new Promise(resolve => setImmediate(resolve))
     const controller = new AbortController()
-    const answer = f.terminal.ask({ title: 'Approve?', signal: controller.signal })
+    const answer = f.terminal.ask({ id: 'test.approve', title: 'Approve?', signal: controller.signal })
     controller.abort()
     expect(await answer).toBeNull()
     f.stdin.write(' after\n')
@@ -128,7 +128,7 @@ describe('ANSI fallback does not require a Tern SDK', () => {
     const unicode = Buffer.from('é', 'utf8')
     f.stdin.write(unicode.subarray(0, 1))
     const answer = f.terminal.ask({
-      title: 'Allow?', choices: [{ label: 'No', value: 'rejected' }],
+      id: 'test.allow', title: 'Allow?', choices: [{ label: 'No', value: 'rejected' }],
     })
     f.stdin.write('1\n')
     expect(await answer).toBe('rejected')
@@ -142,7 +142,7 @@ describe('ANSI fallback does not require a Tern SDK', () => {
     const f = fixture()
     await f.terminal.start(() => {}, () => {}, () => {})
     const answer = f.terminal.ask({
-      title: 'Choose', multiple: true, choices: [
+      id: 'test.choose', title: 'Choose', multiple: true, choices: [
         { label: 'Alpha', value: 'Alpha' },
         { label: 'Beta', value: 'Beta' },
         { label: 'Gamma', value: 'Gamma' },
@@ -157,7 +157,7 @@ describe('ANSI fallback does not require a Tern SDK', () => {
     const f = fixture()
     await f.terminal.start(() => { throw Error('incorrect user submission') }, () => {}, () => {})
     const controller = new AbortController()
-    const answer = f.terminal.ask({ title: 'Approval?', signal: controller.signal })
+    const answer = f.terminal.ask({ id: 'test.approval', title: 'Approval?', signal: controller.signal })
     controller.abort()
     expect(await answer).toBeNull()
   })

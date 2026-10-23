@@ -7,7 +7,7 @@ import {
   connect, node, type Key, type Node, type OpenOptions, type SessionInput,
   type TermInput, type TermOutput,
 } from '@stencil-hq/tern'
-import { abortableAnswer, type Ask, type Terminal } from './terminal.ts'
+import { abortableAnswer, type Ask, type Choice, type Terminal } from './terminal.ts'
 import { Draft, type NativeEdit } from './draft.ts'
 import { safeText, type Entry, type Snapshot } from './model.ts'
 import { TspRecorder } from './record.ts'
@@ -73,6 +73,12 @@ export async function connectTern(
   return { sdk: { node }, session, recorder }
 }
 
+type ActivePrompt = {
+  readonly request: Ask
+  readonly root: string
+  readonly answer: (text: string | null) => void
+}
+
 export class NativeTerminal implements Terminal {
   private surface: TernSurface
   private epoch = 0
@@ -82,7 +88,8 @@ export class NativeTerminal implements Terminal {
   private interrupt: () => void = () => {}
   private quit: (error?: Error) => void = () => {}
   private last: Snapshot | undefined
-  private prompt: { request: Ask; answer: (text: string | null) => void } | undefined
+  private prompt: ActivePrompt | undefined
+  private promptOpenings = 0
   private running: Promise<void> | undefined
   private stopped = false
   private readonly gone = new Map<string, string>()
@@ -183,16 +190,17 @@ export class NativeTerminal implements Terminal {
       else this.quit()
       return
     }
-    if (this.prompt) {
-      if (key.name === 'escape') { this.prompt.answer(null); return }
-      if (this.prompt.request.choices?.length && !this.prompt.request.multiple
+    const prompt = this.prompt
+    if (prompt) {
+      if (key.name === 'escape') { prompt.answer(null); return }
+      if (prompt.request.choices?.length
         && /^[1-9]$/.test(key.name) && !key.alt && !key.ctrl && !key.meta) {
-        const option = this.prompt.request.choices[Number(key.name) - 1]
-        if (option) { this.prompt.answer(option.value); return }
+        const option = prompt.request.choices[Number(key.name) - 1]
+        if (option) { this.choose(prompt, option); return }
       }
       if (key.name === 'enter' && !key.shift && !key.alt) {
         const answer = this.answerDraft.take()
-        if (answer.trim()) this.prompt.answer(answer)
+        if (answer.trim()) prompt.answer(answer)
         this.render()
         return
       }
@@ -204,6 +212,18 @@ export class NativeTerminal implements Terminal {
       return
     }
     if (this.draft.key(key)) this.render()
+  }
+
+  /** PTY keys and native actions use one request-instance-guarded decision. */
+  private choose(prompt: ActivePrompt, choice: Choice): void {
+    if (this.prompt !== prompt) return
+    if (prompt.request.multiple) {
+      const old = this.answerDraft.text
+      this.answerDraft.set(old ? old + ', ' + choice.value : choice.value)
+      this.render()
+    } else {
+      prompt.answer(choice.value)
+    }
   }
 
   private n(kind: string, props: Record<string, unknown>, children: Node[] | string[] = []): Node {
@@ -345,30 +365,46 @@ export class NativeTerminal implements Terminal {
     const layer: Node[] = []
     const prompt = this.prompt
     const answerKind = this.supported('editor', 'input')
-    const buttonKind = this.supported('button')
     if (prompt) {
+      // Root identity belongs to this opening. Reusing a logical approval ID
+      // cannot retarget old wire events through the SDK's newest handler map.
+      const group = this.supported('card', 'col', 'row')
+      const scopedKey = (part: string): string => group ? part : prompt.root + '.' + part
       const options = prompt.request.choices ?? []
-      const children: Node[] = [this.textNode('title', prompt.request.title)]
-      if (prompt.request.detail) children.push(this.textNode('detail', prompt.request.detail, true))
+      const children: Node[] = [this.textNode(scopedKey('title'), prompt.request.title)]
+      if (prompt.request.detail) {
+        children.push(this.textNode(scopedKey('detail'), prompt.request.detail, true))
+      }
+      const choiceKind = this.supported('el', 'row', 'text', 'rows')
       for (const [i, choice] of options.entries()) {
         const label = (i + 1) + ') ' + choice.label
-        if (!buttonKind) { children.push(this.textNode('choice.' + i, label)); continue }
-        children.push(this.n(buttonKind, {
-          key: 'choice.' + i, text: label,
-          onClick: () => {
-            // SDK dispatch may queue a callback from a view replaced pre-paint.
-            if (this.prompt !== prompt) return
-            if (prompt.request.multiple) {
-              const old = this.answerDraft.text
-              this.answerDraft.set(old ? old + ', ' + choice.value : choice.value)
-              this.render()
-            } else prompt.answer(choice.value)
-          },
-        }))
+        const key = scopedKey('choice.' + i)
+        const onClick = (): void => { this.choose(prompt, choice) }
+        // "button" is not a TSP kind. Native el has a real button tag;
+        // negotiated row/text/rows also support pointer actions.
+        if (choiceKind === 'el') {
+          children.push(this.n('el', {
+            key, tag: 'button', text: label, role: 'dsh.question.choice', onClick,
+          }))
+        } else if (choiceKind === 'row') {
+          children.push(this.n('row', {
+            key, role: 'dsh.question.choice', onClick,
+          }, [this.textNode('label', label)]))
+        } else if (choiceKind === 'text') {
+          children.push(this.n('text', {
+            key, text: label, wrap: 'word', role: 'dsh.question.choice', onClick,
+          }))
+        } else if (choiceKind === 'rows') {
+          children.push(this.n('rows', {
+            key, lines: [label], role: 'dsh.question.choice', onClick,
+          }))
+        } else {
+          throw new Error('Tern cannot render an approval choice')
+        }
       }
       if (answerKind) {
         children.push(this.n(answerKind, {
-          key: 'answer', text: this.answerDraft.text, cursor: this.answerDraft.cursor,
+          key: scopedKey('answer'), text: this.answerDraft.text, cursor: this.answerDraft.cursor,
           placeholder: options.length ? (prompt.request.multiple ? 'Numbers separated by commas' : 'Option or custom answer') : 'Answer',
           sendable: true,
           onEdit: (edit: NativeEdit) => {
@@ -382,11 +418,13 @@ export class NativeTerminal implements Terminal {
           },
         }))
       } else {
-        children.push(this.textNode('answer', this.answerDraft.text || 'Type answer; Enter confirms'))
+        children.push(this.textNode(scopedKey('answer'), this.answerDraft.text || 'Type answer; Enter confirms'))
       }
-      const group = this.supported('card', 'col', 'row')
-      if (group) layer.push(this.n(group, { key: 'question', role: 'dsh.question' }, children))
-      else layer.push(...children)
+      if (group) {
+        layer.push(this.n(group, { key: prompt.root, role: 'dsh.question' }, children))
+      } else {
+        layer.push(...children)
+      }
     }
     this.recorder?.setContext({
       revision: this.revision + 1,
@@ -396,8 +434,7 @@ export class NativeTerminal implements Terminal {
     this.revision += 1
     // Focus only an actual editor/input node. Never issue focus to rows/text.
     if (prompt && answerKind) {
-      const prefix = this.supported('card', 'col', 'row') ? 'layer.question.' : 'layer.'
-      this.surface.focus(prefix + 'answer')
+      this.surface.focus('layer.' + prompt.root + '.answer')
     } else if (!prompt && editorKind) {
       const path = ['dock', colKind ? 'composer' : '', rowKind ? 'line' : '', 'input']
         .filter(Boolean).join('.')
@@ -435,9 +472,17 @@ export class NativeTerminal implements Terminal {
     if (this.prompt || this.stopped) return Promise.resolve(null)
     this.answerDraft = new Draft()
     return abortableAnswer(request.signal, settle => {
-      this.prompt = { request, answer: settle }
+      const root = 'request.'
+        + createHash('sha256').update(request.id).digest('hex').slice(0, 12)
+        + '.' + (++this.promptOpenings)
+      const opened: ActivePrompt = { request, root, answer: settle }
+      this.prompt = opened
       this.render()
-      return () => { this.prompt = undefined; this.render() }
+      return () => {
+        if (this.prompt !== opened) return
+        this.prompt = undefined
+        this.render()
+      }
     })
   }
 

@@ -79,10 +79,11 @@ export class AnsiTerminal implements Terminal {
     input.setPrompt(prompt)
     input.prompt()
     if (!restore) return
-    input.write(restore.line)
-    const trailing = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' })
-      .segment(restore.line.slice(restore.cursor))].length
-    for (let pos = 0; pos < trailing; pos++) input.write(null, { name: 'left' })
+    // Readline exposes a UTF-16 cursor. Left is not a grapheme step for ZWJ.
+    // Insert the suffix, move Home, then the prefix at its original caret.
+    input.write(restore.line.slice(restore.cursor))
+    input.write(null, { ctrl: true, name: 'a' })
+    input.write(restore.line.slice(0, restore.cursor))
   }
 
   /** Piped input owns incomplete UTF-8 lines independently of readline. */

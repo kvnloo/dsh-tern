@@ -83,7 +83,9 @@ describe('native inline Tern UI public SDK', () => {
     const editor = f.frames.at(-1)!.dock.flatMap(node => collect(node, 'editor'))[0]!
     const write = editor.handlers?.onEdit as (e: unknown) => void
     write({ from: 0, to: 0, text: 'unsent draft', cursor: 12, len: 0 })
-    const answer = f.terminal.ask({ title: 'Describe' })
+    const answer = f.terminal.ask({ id: 'test.describe', title: 'Describe' })
+    const blocked = f.frames.at(-1)!.dock.flatMap(node => collect(node, 'editor'))[0]!
+    expect(blocked.props.sendable).toBe(false)
     const input = f.frames.at(-1)!.layer.flatMap(node => collect(node, 'editor'))[0]!
     const onEdit = input.handlers?.onEdit as (e: unknown) => void
     onEdit({ from: 0, to: 0, text: 'response', cursor: 8, len: 0 })
@@ -93,17 +95,19 @@ describe('native inline Tern UI public SDK', () => {
     expect(await answer).toBe('response')
     const resumed = f.frames.at(-1)!.dock.flatMap(node => collect(node, 'editor'))[0]!
     expect(resumed.props.text).toBe('unsent draft')
+    expect(resumed.props.sendable).toBe(true)
     await f.terminal.closed()
   })
-  it('buttons deliver modal choices without sending a normal prompt', async () => {
+  it('negotiated el buttons deliver modal choices without a normal prompt', async () => {
     const f = fixture()
     await f.terminal.start(() => { throw Error('wrong user submission') }, () => {}, () => {})
     f.terminal.update(snapshot)
-    const answer = f.terminal.ask({ title: 'Authorize?', choices: [
+    const answer = f.terminal.ask({ id: 'test.authorize', title: 'Authorize?', choices: [
       { label: 'Allow once', value: 'allowed-once' },
       { label: 'Deny', value: 'rejected' },
     ] })
-    const buttons = f.frames.at(-1)!.layer.flatMap(node => collect(node, 'button'))
+    const buttons = f.frames.at(-1)!.layer.flatMap(node => collect(node, 'el'))
+      .filter(item => item.props.tag === 'button')
     expect(buttons).toHaveLength(2)
     const onClick = buttons[1]?.handlers?.onClick as () => void
     onClick()
