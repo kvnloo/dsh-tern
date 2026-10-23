@@ -18,7 +18,7 @@ function collect(value: unknown, kind: string): Node[] {
 }
 function fixture() {
   const frames: Array<{ main: unknown[]; dock: unknown[]; layer: unknown[] }> = []
-  const opens: string[] = []
+  const opens: Array<string | undefined> = []
   let finish = () => {}
   let closed = false
   const idle = new Promise<void>(resolve => { finish = resolve })

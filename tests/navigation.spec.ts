@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Transcript } from '../src/model.ts'
 
-const event = (seq: number, text: string): SessionEvent => ({
-  seq, time: seq, type: 'user/message',
-  data: { content: [{ type: 'text', text }] },
-}) as SessionEvent
+const event = (seq: number, text: string): Extract<SessionEvent, { type: 'user/message' }> => ({
+  seq: SessionSeq(seq), time: seq, type: 'user/message', surfaceOp: 'append',
+  data: createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }),
+})
 
 describe('durable history navigation', () => {
   it('retains every durable identity while screen snapshots stay bounded', () => {
@@ -24,10 +25,9 @@ describe('durable history navigation', () => {
     const transcript = new Transcript('session')
     for (let seq = 0; seq < 270; seq++) transcript.accept(event(seq, 'message ' + seq))
     transcript.accept({
-      seq: 270, time: 270, type: 'user/message',
-      surfaceOp: { op: 'replace', startSeq: 0, endSeq: 0 },
-      data: { content: [{ type: 'text', text: 'replacement' }] },
-    } as SessionEvent)
+      ...event(270, 'replacement'),
+      surfaceOp: { op: 'replace', startSeq: SessionSeq(0), endSeq: SessionSeq(0) },
+    })
     const all = transcript.snapshot({ all: true }).entries
     expect(all).toHaveLength(270)
     expect(all.some(entry => entry.id === 'event.0')).toBe(false)

@@ -89,11 +89,28 @@ describe('single durable projection', () => {
 
   it('reconciles a durable surface replacement instead of replaying compacted nodes', () => {
     const transcript = new Transcript('compacted')
-    transcript.accept({ ...ev(1, 'user/message', { content: [{ type: 'text', text: 'old' }] }), surfaceOp: 'append' })
-    transcript.accept({ ...ev(2, 'assistant/message', { message: { content: [{ type: 'text', text: 'older' }] } }), surfaceOp: 'append' })
     transcript.accept({
-      ...ev(3, 'assistant/message', { message: { content: [{ type: 'text', text: 'summary' }] } }),
-      surfaceOp: { op: 'replace', startSeq: 1, endSeq: 2 },
+      seq: SessionSeq(1), time: 1, type: 'user/message', surfaceOp: 'append',
+      data: createUserMessage({ content: [{ type: 'text', text: 'old' }], source: { kind: 'user' } }),
+    })
+    transcript.accept({
+      seq: SessionSeq(2), time: 2, type: 'assistant/message', surfaceOp: 'append',
+      data: {
+        turn: 1, step: 1, stream: [],
+        message: createAssistantMessage({
+          content: [{ type: 'text', text: 'older' }], source: { provider: 'fixture', model: 'fixture' },
+        }),
+      },
+    })
+    transcript.accept({
+      seq: SessionSeq(3), time: 3, type: 'assistant/message',
+      surfaceOp: { op: 'replace', startSeq: SessionSeq(1), endSeq: SessionSeq(2) },
+      data: {
+        turn: 1, step: 2, stream: [],
+        message: createAssistantMessage({
+          content: [{ type: 'text', text: 'summary' }], source: { provider: 'fixture', model: 'fixture' },
+        }),
+      },
     })
     expect(transcript.snapshot().entries.map(row => row.text)).toEqual(['summary'])
   })

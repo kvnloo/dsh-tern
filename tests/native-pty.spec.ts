@@ -5,7 +5,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import {
-  connect, encodeMessage, node, type Session, type TermInput, type TermOutput,
+  connect, encodeMessage, node, type TermInput, type TermOutput,
 } from '@stencil-hq/tern'
 import { NativeTerminal } from '../src/native.ts'
 import type { Snapshot } from '../src/model.ts'
