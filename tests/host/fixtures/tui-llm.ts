@@ -44,7 +44,9 @@ class TuiFixtureAdapter extends LlmAdapter {
       if (!options.signal) throw new Error('fixture in-flight stream requires caller cancellation')
       yield { type: 'block-start', index: 0, blockType: 'text' }
       yield { type: 'text-delta', index: 0, text: 'PARTIAL_INFLIGHT_INTERRUPTED' }
-      // This nonempty partial is intentionally committed with interrupted:true by\n      // Agent on cancel. A provider failure above remains an uncommitted attempt.\n      // No delay/retry: the real caller's abort is the only release condition.
+      // This nonempty partial is committed with interrupted:true by the real
+      // Agent on cancel. A provider failure remains an uncommitted attempt.
+      // No delay/retry: the real caller's abort is the only release condition.
       if (!options.signal.aborted) {
         await new Promise<void>(resolve =>
           options.signal!.addEventListener('abort', () => resolve(), { once: true }))
