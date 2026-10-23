@@ -330,3 +330,66 @@ flock: `corepack pnpm run build:lib:host`,
 `corepack pnpm run doc-sync` and packed-SDK checks as directed by the
 lead. **Native PTY smokes and real-Tern pointer runs MUST run outside the
 MBP build flock**, in their own private runtimes; no live provider keys.
+
+## TRN15 source/lib PTY fixture corrections (connector-authored, UNRUN)
+
+The 20261023-112718-c2dc MBP run at **f99f09517b7bb30251e949230ca65590ae85d186**
+passed frozen install, complete root build, client contract typing, Python/Bash
+syntax and **117 focused tests in 18 files**. Its source PTY matrix with
+`--retry=0` was **11 PASS / 4 FAIL** out of 15; these are historical
+results at that exact prior SHA, **not a pass for the new head**.
+
+This test-only correction retains all five keyless and nine public-service
+cases (plus the other existing PTY case), timeouts, keyless model adapter and
+normal Session/ApprovalService/UserQuestion owners. The late ANSI protocol
+fixture counts **source.kind=user** intents instead of including unrelated,
+legitimate durable `user/message` context. The two sequential ANSI fixture
+tool calls now assert the exact emitted name and `running` → `done`
+lifecycle text, while still proving two independent persisted call IDs,
+finished results and assistant/tool correlation.
+
+The PTY driver's actionable question controls now come from the **current**
+emitted `dsh.question` semantic document in either `layer` (negotiated modal)
+or `dock` (no-overlay fallback). Leaf-only negotiated dock choices are also
+supported by their request-scoped semantic identities. Each complete SDK
+frame rebuilds that selection from live nodes, including `add`, `set`
+and `del` updates; replaced/reopened prompts do not retain old controls.
+Unrelated composer/editor/navigation nodes do not qualify. It still sends
+the real `ev:action,act:click` and `ev:send,text` SDK event shapes; it does
+not fake a pointer click. Synthetic unit regressions in
+`packages/bundle/tui-app/tests/harness-evidence.spec.ts` exercise modal,
+dock, leaf-only and row choices, editor IDs, replacement/deletion/reopening,
+exclusion of unrelated dock controls and the exact resulting event objects.
+They do **not** claim live provider, Agent, Session or native-pointer proof.
+
+OMP must run the following on the **new exact head** (no tests were run by
+this GitHub-connector worker), with a private Linux PTY and no provider keys.
+Acquire/release the fleet build lock for heavy build/typecheck/hygiene gates;
+never hold it during native PTY or true-Tern tests:
+
+~~~sh
+git fetch origin tern/native-profile
+git switch tern/native-profile
+git rev-parse HEAD
+corepack pnpm install --frozen-lockfile --prefer-offline
+corepack pnpm run build
+corepack pnpm run typecheck
+python3 -m py_compile apps/cli/tests/profiles/tui/harness/*.py
+bash -n apps/cli/tests/profiles/tui/harness/private_tern.sh
+corepack pnpm exec vitest run packages/bundle/tui-app/tests
+corepack pnpm exec vitest run --config vitest.e2e.config.ts --retry=0 \
+  apps/cli/tests/profiles/tui/tests/keyless.e2e.ts \
+  apps/cli/tests/profiles/tui/tests/public-services.e2e.ts
+DSH_EXAMPLE_MODE=lib corepack pnpm exec vitest run --config vitest.e2e.config.ts --retry=0 \
+  apps/cli/tests/profiles/tui/tests/keyless.e2e.ts \
+  apps/cli/tests/profiles/tui/tests/public-services.e2e.ts
+corepack pnpm run hygiene
+corepack pnpm run doc-sync
+~~~
+
+Record the exact SHA, 15-case source and lib result counts and all command
+exit codes. The lead must separately run the private real-Tern pointer
+`pick`/`click` smoke described above: SDK-injected action routing is **not**
+evidence of hit-testing. A new runtime failure requires private complete
+frame and physical Session evidence for its owning lane, never a relaxed
+fixture or fabricated Session event.
