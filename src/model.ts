@@ -7,10 +7,18 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 
 export type EntryKind = 'user' | 'assistant' | 'tool' | 'error' | 'notice'
+/** Provenance from public tool/call, tool/result, and turn/end events. */
+export type ToolStatus = 'running' | 'done' | 'error' | 'cancelled'
+export interface ToolFacts {
+  readonly name: string
+  readonly status: ToolStatus
+}
 export interface Entry {
   readonly id: string
   readonly kind: EntryKind
   readonly text: string
+  /** Present only when a public tool/call establishes the tool identity. */
+  readonly tool?: ToolFacts
 }
 
 /** Current public-service facts, never synthetic progress or model history. */
@@ -118,30 +126,48 @@ export class Transcript {
       case 'user/message':
         entry = { id, kind: 'user', text: textContent(event.data.content) }
         break
-      case 'assistant/message':
-        entry = {
-          id: 'assistant.' + event.data.turn + '.' + event.data.step,
-          kind: 'assistant',
-          // Cancellation can durably commit a partial answer; only the display text is annotated.
-          text: (event.data.interrupted ? 'Interrupted response\n' : '')
-            + textContent(event.data.message.content),
+      case 'assistant/message': {
+        const blocks = event.data.message.content
+        // The assistant's durable call-only event is retained in Session, but
+        // has no assistant text to display beside its canonical tool row.
+        // Keep whitespace, reasoning/other blocks, and interrupted partials.
+        const callOnly = !event.data.interrupted
+          && blocks.some(block => block.type === 'tool-call')
+          && blocks.every(block => block.type === 'tool-call'
+            || (block.type === 'text' && block.text === ''))
+        if (!callOnly) {
+          entry = {
+            id: 'assistant.' + event.data.turn + '.' + event.data.step,
+            kind: 'assistant',
+            // Cancellation can durably commit a partial answer; only display text is annotated.
+            text: (event.data.interrupted ? 'Interrupted response\n' : '')
+              + textContent(blocks),
+          }
         }
         this.preview = ''
         this.previewId = undefined
         this.attempt = undefined
         break
+      }
       case 'tool/call': {
         const toolId = 'tool.' + event.data.callId
-        entry = { id: toolId, kind: 'tool', text: 'Running ' + safeText(event.data.name) }
-        this.runningTools.set(toolId, { turn: event.data.turn, name: event.data.name })
+        const name = safeText(event.data.name)
+        entry = { id: toolId, kind: 'tool', text: 'Running ' + name,
+          tool: { name, status: 'running' } }
+        this.runningTools.set(toolId, { turn: event.data.turn, name })
         break
       }
       case 'tool/result': {
         const toolId = 'tool.' + event.data.message.toolCallId
+        const name = this.runningTools.get(toolId)?.name
+          ?? this.rows.find(row => row.id === toolId)?.tool?.name
         entry = {
           id: toolId,
           kind: event.data.message.isError ? 'error' : 'tool',
           text: 'Tool result: ' + textContent(event.data.message.content),
+          ...(name === undefined ? {} : {
+            tool: { name, status: event.data.message.isError ? 'error' : 'done' },
+          }),
         }
         this.runningTools.delete(toolId)
         break
@@ -157,7 +183,10 @@ export class Transcript {
         for (const [toolId, tool] of this.runningTools) {
           if (tool.turn !== event.data.turn) continue
           this.runningTools.delete(toolId)
-          this.upsert({ id: toolId, kind: 'error', text: 'Interrupted ' + safeText(tool.name) }, event.seq)
+          const status: ToolStatus = ['aborted', 'interrupted', 'forked'].includes(event.data.reason.kind)
+            ? 'cancelled' : 'error'
+          this.upsert({ id: toolId, kind: 'error', text: 'Interrupted ' + tool.name,
+            tool: { name: tool.name, status } }, event.seq)
         }
         if (event.data.reason.kind === 'error') {
           entry = { id, kind: 'error', text: safeText(event.data.reason.error.message) }
