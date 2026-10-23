@@ -127,7 +127,8 @@ export class NativeTerminal implements Terminal {
     this.unlistenAcks = surface.onAck?.(() => {
       // The real SDK consumes ACK before yielding SessionInput. This listener
       // therefore drives replay, rather than a timer or invented ACK events.
-      if (this.stopped || surface !== this.surface) return
+      if (this.stopped || surface !== this.surface || !this.last
+        || this.replayCursor >= this.last.entries.length) return
       this.replayPermit = true
       this.render()
     })
