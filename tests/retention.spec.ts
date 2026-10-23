@@ -177,6 +177,10 @@ describe('RFC #6 real-SDK settled history retention', () => {
     try {
       terminal.update(snapshot([first, second]))
       await vi.waitFor(() => expect(oracle.settled.has('main.one') && oracle.settled.has('main.two')).toBe(true))
+      await new Promise(resolve => setImmediate(resolve))
+      const quiescent = oracle.frames.length
+      await new Promise(resolve => setImmediate(resolve))
+      expect(oracle.frames).toHaveLength(quiescent) // No ACK -> focus -> ACK cycle.
       oracle.evict('main.one')
       input.send(reply({ ev: 'gone', sf: 'dsh', ids: ['main.one'] }))
       await new Promise(resolve => setImmediate(resolve))
