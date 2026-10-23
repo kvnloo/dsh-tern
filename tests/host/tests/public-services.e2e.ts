@@ -459,7 +459,7 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
       expectRestoredComposer(run)
       expect(run.actions_sent).toHaveLength(1)
       expect(run.actions_sent![0]!.label).toMatch(/Allow once$/)
-      expect(run.actions_sent![0]!.id).toMatch(/^(?:layer|dock)\.request\./)
+      expect(run.actions_sent![0]!.id).toMatch(/^(?:layer|dock)\.request\.[a-f0-9]{12}\.\d+\.choice\.\d+$/)
       const log = await history(dir)
       expect(users(log)).toEqual(['[approval-allow]', 'α😀\nsecond!Z'])
       approvalPair(log, 'allowed-once')
@@ -535,7 +535,7 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
         nativeExit,
       ], { sessionId: initial.id })
       expect(second.exit_code, second.output).toBe(0)
-      expect(second.actions_sent?.[0]?.id).toMatch(/^(?:layer|dock)\.request\./)
+      expect(second.actions_sent?.[0]?.id).toMatch(/^(?:layer|dock)\.request\.[a-f0-9]{12}\.\d+\.answer$/)
       const after = await history(dir)
       expect(users(after)).toEqual(['[question-choice]', '[question-multi]'])
       const pairs = toolPairs(after)
