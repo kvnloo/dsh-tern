@@ -6,7 +6,9 @@ import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { installModelSelection, type AgentHandle, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import {
+  installModelSelection, type AgentHandle, type ModelSelection, type ModelSelectionRef,
+} from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq, type Session, type SessionEvent, type SessionId } from '@deepseek-ai/dsh-session'
 import { SessionQueryError } from '@deepseek-ai/dsh-session-query'
@@ -21,6 +23,7 @@ import { ResourceStack } from './lifecycle.ts'
 import { Transcript } from './model.ts'
 import { connectTern, NativeTerminal } from './native.ts'
 import { answerItem } from './questions.ts'
+import { ProductServices } from './services.ts'
 import type { Terminal } from './terminal.ts'
 
 export const name = 'tui-app'
@@ -84,12 +87,16 @@ async function run(ctx: Context, config: Config): Promise<void> {
   const release = new ResourceStack()
   const done = Promise.withResolvers<void>()
   let lastInterrupt = 0
+  const ownedHandles = new Set<AgentHandle>()
+  const products = new ProductServices(ctx)
 
   try {
-    const selection = model.currentSelection()
+    let selectionRef: ModelSelectionRef = { current: model.currentSelection(), assembled: undefined }
+    const initialRef = selectionRef
+    const selection = initialRef.current!
     const agentOptions = { provider: selection.provider, model: selection.model }
     const setup = (agentCtx: Context): void => {
-      installModelSelection(agentCtx, { current: selection, assembled: undefined } satisfies ModelSelectionRef)
+      installModelSelection(agentCtx, initialRef)
     }
     const fs = ctx.get('fs')
     const cwd = fs === undefined ? process.cwd() : fs.processPath(await fs.resolve('.'))
@@ -112,8 +119,9 @@ async function run(ctx: Context, config: Config): Promise<void> {
         throw error
       }
     }
-    const agent = handle.agent
-    const transcript = new Transcript(id)
+    ownedHandles.add(handle)
+    let agent = handle.agent
+    let transcript = new Transcript(id)
     transcript.replay(agent.session)
     transcript.status(agent.status)
 
@@ -126,12 +134,15 @@ async function run(ctx: Context, config: Config): Promise<void> {
       release.add(() => { process.off(signal, stopOnSignal) })
     }
 
-    connected = config.native === false ? null : await connectTern()
+    connected = config.native === false ? null : await connectTern(id)
     terminal = connected
-      ? new NativeTerminal(connected.sdk, connected.session)
+      ? new NativeTerminal(connected.sdk, connected.session, connected.recorder)
       : new AnsiTerminal()
     const display = terminal
-    const show = (): void => display.update(transcript.snapshot({ all: true }))
+    let switching = false
+    const show = (): void => display.update(transcript.snapshot({
+      all: true, product: products.project(agent, selectionRef),
+    }))
     const interrupt = (): void => {
       if (agent.status === 'running') {
         agent.cancel({ kind: 'user' })
@@ -140,29 +151,176 @@ async function run(ctx: Context, config: Config): Promise<void> {
       if (Date.now() - lastInterrupt < 1500) done.resolve()
       else lastInterrupt = Date.now()
     }
-    const submit = (raw: string): void => {
-      if (stopping) return
+    const warn = (error: unknown): void => {
+      transcript.notice(error instanceof Error ? error.message : String(error))
+      show()
+    }
+    const report = (message: string): void => { transcript.notice(message); show() }
+
+    const switchSession = async (target: SessionId, fresh: boolean): Promise<void> => {
+      if (switching) throw new Error('a session switch is already in flight')
+      if (agent.status === 'running') throw new Error('finish or stop the current turn before switching sessions')
+      if (!fresh && target === agent.id) return report('Already in session ' + target)
+      if (agents.get(target)) throw new Error('session ' + target + ' is already owned by a live Agent')
+      switching = true
+      let nextHandle: AgentHandle | undefined
+      try {
+        await agent.whenIdle()
+        await sessions.flush(agent.session)
+        let nextRoute: ModelSelection = model.currentSelection()
+        if (!fresh) {
+          const query = ctx.get('sessionQuery')
+          if (!query || !ctx.get('sessionPersistence')) {
+            throw new Error('resuming requires both sessionQuery and sessionPersistence')
+          }
+          using observation = await query.observeSession(target)
+          assertRootSession(observation.header, observation.events, target, cwd)
+          // A resumed session retains its last durable request route; a global
+          // default changed meanwhile must not silently select another model.
+          for (const event of observation.events) {
+            if (event.type !== 'request/header') continue
+            const route = event.data.header.config
+            nextRoute = {
+              provider: route.provider, model: route.model,
+              ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
+            }
+          }
+        }
+        const nextRef: ModelSelectionRef = { current: nextRoute, assembled: undefined }
+        const agentOptions = { provider: nextRoute.provider, model: nextRoute.model }
+        const setup = (agentCtx: Context): void => { installModelSelection(agentCtx, nextRef) }
+        nextHandle = fresh
+          ? await agents.create({ sessionId: target, meta: { cwd }, agentOptions, setup })
+          : await agents.resume({ resumeSessionId: target, agentOptions, setup })
+        if (!fresh) assertRootSession(nextHandle.agent.session.header, readEvents(nextHandle.agent.session), target, cwd)
+        const nextTranscript = new Transcript(target)
+        nextTranscript.replay(nextHandle.agent.session)
+        nextTranscript.status(nextHandle.agent.status)
+        const previous = handle!
+        const previousId = agent.id
+        ownedHandles.add(nextHandle)
+        handle = nextHandle
+        agent = nextHandle.agent
+        selectionRef = nextRef
+        transcript = nextTranscript
+        products.clearDetail(previousId)
+        report('Session: ' + target)
+        await previous.dispose()
+        ownedHandles.delete(previous)
+      } catch (error) {
+        if (nextHandle && nextHandle !== handle) await nextHandle.dispose()
+        throw error
+      } finally {
+        switching = false
+      }
+    }
+
+    const choose = async (
+      title: string, choices: readonly { label: string; value: string }[],
+    ): Promise<string | null> => {
+      if (choices.length === 0) throw new Error(title + ': no candidates from the owning service')
+      return display.ask({ title, choices: [...choices] })
+    }
+    const commands = async (raw: string): Promise<void> => {
       const text = raw.trim()
-      if (!text) return
-      if (text === '/quit' || text === '/exit') return done.resolve()
-      if (text === '/stop') return interrupt()
-      if (text === '/session') {
-        transcript.notice('Session: ' + id)
+      if (!text || stopping) return
+      if (switching) {
+        display.restoreDraft(raw)
+        report('Switch in progress; draft retained. Submit after adoption.')
+        return
+      }
+      if (text === '/quit' || text === '/exit') { done.resolve(); return }
+      if (text === '/stop') { interrupt(); return }
+      if (text === '/session') return report('Session: ' + agent.id)
+      if (text === '/help') {
+        return report('/model · /models · /sessions · /new · /resume ID · /plan · /tasks · '
+          + '/jobs · /job ID · /job-stop ID · /agents · /agent ID · /agent-steer ID TEXT · '
+          + '/agent-stop ID · /steer TEXT · /stop · /quit')
+      }
+      if (text === '/model' || text === '/models') {
+        const options = await products.modelChoices()
+        const chosen = await choose('Choose a model', options.map(option => ({
+          label: option.label, value: option.id,
+        })))
+        if (!chosen) return
+        const selected = await products.selectModel(selectionRef, chosen)
+        return report('Model: ' + selected.provider + '/' + selected.model)
+      }
+      if (text.startsWith('/model ')) {
+        const selected = await products.selectModel(selectionRef, text.slice(7).trim())
+        return report('Model: ' + selected.provider + '/' + selected.model)
+      }
+      if (text === '/sessions') {
+        const options = (await products.rootSessions(cwd))
+          .filter(choice => choice.persisted && choice.id !== agent.id)
+        const chosen = await choose('Resume an existing root session', options.map(choice => ({
+          label: choice.label, value: String(choice.id),
+        })))
+        if (chosen) await switchSession(brandString<SessionId>(chosen), false)
+        return
+      }
+      if (text === '/new') {
+        await switchSession(brandString<SessionId>('session-' + randomUUID()), true)
+        return
+      }
+      if (text.startsWith('/resume ')) {
+        await switchSession(brandString<SessionId>(text.slice(8).trim()), false)
+        return
+      }
+      if (text === '/plan') {
+        const plan = products.project(agent, selectionRef).plan
+        return report(plan ? 'Plan: ' + (plan.active ? 'active' : 'inactive')
+          + (plan.pending === undefined ? '' : ' · pending ' + String(plan.pending))
+          : 'Plan mode service is not configured')
+      }
+      if (text === '/tasks') {
+        const tasks = products.project(agent, selectionRef).tasks
+        return report(tasks ? 'Task list: ' + tasks.length + ' logged items' : 'No current durable task list')
+      }
+      if (text === '/jobs') {
+        const jobs = products.project(agent, selectionRef).jobs
+        return report(jobs ? 'Jobs: ' + jobs.length + ' visible' : 'Job registry is not configured')
+      }
+      if (text.startsWith('/job ')) {
+        products.inspectJob(agent.id, text.slice(5).trim())
         return show()
       }
-      if (text === '/help') {
-        transcript.notice('/help · /session · /stop · /steer <text> · /quit')
+      if (text.startsWith('/job-stop ')) {
+        const result = products.stopJob(agent.id, text.slice(10).trim())
+        return report('Job stop: ' + result)
+      }
+      if (text === '/agents') {
+        const target = agent.id
+        const children = await products.refreshDescendants(target)
+        if (target === agent.id) report('Subagents: ' + (children?.length ?? 0) + ' durable descendants')
+        return
+      }
+      if (text.startsWith('/agent ')) {
+        await products.inspectChild(agent.id, text.slice(7).trim())
         return show()
+      }
+      if (text.startsWith('/agent-stop ')) {
+        await products.stopChild(agent.id, text.slice(12).trim())
+        return report('Subagent stop requested')
+      }
+      if (text.startsWith('/agent-steer ')) {
+        const match = /^\/agent-steer\s+(\S+)\s+([\s\S]+)$/.exec(raw)
+        if (!match) throw new Error('Usage: /agent-steer CHILD_ID MESSAGE')
+        await products.steerChild(agent.id, match[1]!, match[2]!, 'steer')
+        return report('Subagent steer accepted')
       }
       const steer = text.startsWith('/steer ')
-      if (steer && !text.slice(7).trim()) return
+      if (text.startsWith('/') && !steer) return report('Unknown command; use /help')
       const message = createUserMessage({
-        content: [{ type: 'text', text: steer ? text.slice(7) : raw }],
+        content: [{ type: 'text', text: steer ? raw.slice(7) : raw }],
         source: { kind: 'user' },
       })
       if (steer) agent.steer(message)
       else agent.followup(message)
       show()
+    }
+    const submit = (raw: string): void => {
+      void commands(raw).catch(warn)
     }
 
     release.add(ctx.on('session/event', (session, event) => {
