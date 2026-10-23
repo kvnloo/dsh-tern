@@ -9,7 +9,7 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { apply, type TuiStartupValues } from '../src/startup.ts'
-import { PROFILE_TEMPLATES } from '@deepseek-ai/dsh-app-boot/profile'
+import { PROFILE_TEMPLATES } from '../../../boot/app-boot/src/profile.ts'
 
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => { for (const close of cleanups.splice(0)) await close() })
