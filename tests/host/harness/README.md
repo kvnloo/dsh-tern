@@ -79,3 +79,68 @@ This fails on replay-only manifests, differing Tern builds, missing live program
 This branch slice owns ONLY apps/cli/tests/profiles/tui/** plus the new packages/bundle/tui-app/tests/native-pty.spec.ts and transport-conformance.spec.ts. Source runtime, package manifests and existing package tests belong to SERVICES. Next owned test slices: tool call/result/error and live/durable reconciliation; approval and question competing with a half-written draft; cancellation/EOF/crash status recovery; true cold-daemon restart/resume; private real Hermes/OMP fixture differential. Any source defect must be fixed by the separate SERVICES chat, never hidden in test code.
 
 APC/OSC 877 coverage through the JS SDK is not evidence of native Windows ConPTY/Win32 behavior. The lead owns MBP native smoke and any Windows/ConPTY gate; parser-only tests cannot certify them.
+
+## TRN6 public-service acceptance (strict, connector-authored, UNRUN)
+
+The adjacent tests/public-services.e2e.ts adds **nine** shipped CLI acceptance
+witnesses. They reuse fixtures/cordis.yml, the real model adapter in
+fixtures/tui-llm.ts, and the harmless fixtures/tui-tools.ts. The only
+tool-owned filesystem effect is exclusive creation of approval-allowed.marker
+directly in the newly allocated, mode-0700 DSH_TUI_TEST_WORKSPACE; the model
+supplies no path and no shell runs. The production @deepseek-ai/dsh-tool-ask-user
+tool and public ctx.userQuestions.ask() own question answers; the production
+ctx.approval.request() owns approval policy, cancellation and paired durable
+audit. Neither Agent nor Session nor native renderer is mocked.
+
+Cases exercise: ANSI real tool start/result twice with different persisted
+toolCallIds; native one-card in-place tool result plus fresh-process resume;
+Unicode/multiline draft and caret through keyboard denial; genuine
+TSP ev:action, act:click on a choice found from emitted el(tag:button)
+documents for a fresh allow-once request; strict Escape-cancel approval;
+ANSI question choice; native question choice and multi-select/custom
+answer; native question Escape cancellation; genuinely in-flight provider
+stream with observed live text, Ctrl-C, new turn and durable process resume.
+Every outcome is checked against the real physical Session JSONL and, for
+native, emitted SDK frame operations. No test manufactures a Session event
+or imports agent-loop internals. Existing five keyless.e2e.ts tests and
+assertions are unchanged.
+
+The PTY driver now reads actual surface-frame add documents to discover
+current per-open hashed layer.request.* editor and el(tag:button) action
+IDs; it never sends historical hard-coded question paths. wait_after waits
+for a new observed byte occurrence, not a sleep. Failures keep owner-only
+PTY bytes, decoded text, JSON frames and durable Sessions in their reported
+private workspace; success removes the entire private workspace after
+the child has exited.
+
+**Known source-contract tension, not a claimed executed RED:** src/index.ts
+maps a null answer to 'rejected' unless request.signal?.aborted, even when
+native Escape dismisses approval; the new Escape witness requires the
+distinct 'cancelled' outcome. The source belongs to TRN6-DSH-RETENTION/lead,
+NOT to this fixture slice. Do not adjust this witness to accept 'rejected'
+merely to get green.
+
+Lead OMP must obtain its fleet-build lock, run in the private Linux PTY
+environment off groot and record exact exit codes, not guessed pass counts:
+
+~~~sh
+git rev-parse HEAD
+corepack pnpm install --frozen-lockfile
+corepack pnpm run build:lib:host
+python3 -m py_compile apps/cli/tests/profiles/tui/harness/*.py
+corepack pnpm exec vitest run --config vitest.e2e.config.ts \
+  apps/cli/tests/profiles/tui/tests/keyless.e2e.ts \
+  apps/cli/tests/profiles/tui/tests/public-services.e2e.ts
+DSH_EXAMPLE_MODE=lib corepack pnpm exec vitest run --config vitest.e2e.config.ts \
+  apps/cli/tests/profiles/tui/tests/keyless.e2e.ts \
+  apps/cli/tests/profiles/tui/tests/public-services.e2e.ts
+~~~
+
+A macOS/Windows host without the Linux PTY execution environment
+**skips** these describe.skipIf suites: a skip is not acceptance.
+No command above was executed by the GitHub-only worker. Passing these
+public fixtures alone will not close RFC #6's true Tern, SSH/tmux,
+ConPTY, daemon-retention, Windows, stress, and Hermes/OMP differential
+gates. Preserve existing strict checks and report any other RED as the
+actual API/file/observed-vs-expected behavior, not as permission to
+write outside apps/cli/tests/profiles/tui/**.
