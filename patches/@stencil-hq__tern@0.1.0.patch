@@ -19,10 +19,10 @@ diff --git a/src/surface.ts b/src/surface.ts
 -import { View, type Renderable } from './reconcile.js';
 +import { View, type Renderable, type Tree } from './reconcile.js';
 +import { Node } from './nodes.js';
-@@ -84,1 +84,2 @@
+@@ -84,1 +85,2 @@
 +   #ackListeners = new Set<(sequence: number) => void>();
     #queue: Op[] = [];
-@@ -129,1 +129,35 @@
+@@ -129,1 +131,35 @@
 +   /** Forget only renderer snapshots for terminal-retired ids (no wire del). */
 +   forget(ids: readonly string[]): void {
 +      if (this.#closed || ids.length === 0) return;
@@ -58,7 +58,7 @@ diff --git a/src/surface.ts b/src/surface.ts
 +      return () => { this.#ackListeners.delete(listener); };
 +   }
     /** Installs (or with `null` removes) stylesheet `name`. */
-@@ -214,2 +214,3 @@
+@@ -214,2 +250,3 @@
 -      this.#acked = Math.min(s, this.#seq);
 -      this.#pump();
 +      this.#acked = Math.min(s, this.#seq);
@@ -71,10 +71,10 @@ diff --git a/dist/surface.js b/dist/surface.js
 -import { View } from './reconcile.js';
 +import { View } from './reconcile.js';
 +import { Node } from './nodes.js';
-@@ -66,1 +66,2 @@
+@@ -30,1 +31,2 @@
 +    #ackListeners = new Set();
      #queue = [];
-@@ -120,1 +120,34 @@
+@@ -72,1 +74,34 @@
 +    /** Forget only renderer snapshots for terminal-retired ids (no wire del). */
 +    forget(ids) {
 +        if (this.#closed || ids.length === 0) return;
@@ -109,7 +109,7 @@ diff --git a/dist/surface.js b/dist/surface.js
 +        return () => { this.#ackListeners.delete(listener); };
 +    }
      /** Installs (or with `null` removes) stylesheet `name`. */
-@@ -187,2 +187,3 @@
+@@ -154,2 +189,3 @@
 -        this.#acked = Math.min(s, this.#seq);
 -        this.#pump();
 +        this.#acked = Math.min(s, this.#seq);
@@ -118,7 +118,7 @@ diff --git a/dist/surface.js b/dist/surface.js
 diff --git a/dist/surface.d.ts b/dist/surface.d.ts
 --- a/dist/surface.d.ts
 +++ b/dist/surface.d.ts
-@@ -69,1 +69,5 @@
+@@ -71,1 +71,5 @@
 -    render(view: Renderable): void;
 +    render(view: Renderable): void;
 +    /** Forget renderer references to gone ids without sending deletes. */
