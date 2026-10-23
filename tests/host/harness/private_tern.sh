@@ -67,8 +67,26 @@ if [[ -z "$LAUNCHER" ]]; then
   else
     [[ -f "$CLI" && -d "$REPO/node_modules" ]] ||
       { echo "local built/source prerequisites absent: $CLI and node_modules" >&2; exit 2; }
+    # A CLI file hash alone cannot bind a binary to the current Git head.
+    # The complete root build writes a source/version/client-artifact record
+    # only after build:lib finishes. Refuse a missing or stale build record.
+    node --input-type=module - "$REPO" "$SOURCE_SHA" "$CLI" <<'JS'
+import { readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+const [root, head, cli] = process.argv.slice(2)
+const { readClientBuildRecord } = await import(pathToFileURL(join(root, 'scripts/client-build-environment.ts')).href)
+const record = readClientBuildRecord(root)
+const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version
+if (record.environment.DSH_CLIENT_COMMIT_HASH !== head.slice(0, 7)
+    || record.environment.DSH_CLIENT_VERSION !== version
+    || record.environment.DSH_CLIENT_GIT_DIRTY === 'true'
+    || statSync(cli).mtimeMs > statSync(join(root, '.dsh-build/client-build-environment.json')).mtimeMs) {
+  throw new Error('local CLI build record is stale or inconsistent with source/build')
+}
+JS
     HASH="$(sha256sum "$CLI" | cut -d' ' -f1)"
-    PROVENANCE="measured built CLI on current local checkout"
+    PROVENANCE="measured CLI hash; complete root build record checked against commit, version and client artifact hashes"
   fi
 else
   [[ "$LAUNCHER" = /* && -x "$LAUNCHER" ]] ||
@@ -99,12 +117,51 @@ else
   BASE="$(mktemp -d "${TMPDIR:-/tmp}/dsh-tsp-native.XXXXXXXX")"
 fi
 BASE="$(cd "$BASE" && pwd -P)"
-mkdir -m 700 -- "$BASE"/{runtime,home,cache,config,agents,sessions,tern,control,log}
+mkdir -m 700 -- "$BASE"/{runtime,home,cache,config,agents,sessions,tern,control,log,workspace}
+WORKSPACE="$BASE/workspace"
 SWAY_PID=""
 TERN_PID=""
+SWAY_START=""
+TERN_START=""
+process_start() {
+  python3 - "$1" <<'PY'
+import sys
+try:
+ with open("/proc/"+sys.argv[1]+"/stat",encoding="utf-8") as stream:
+  print(stream.read().rsplit(")",1)[1].split()[19])
+except (OSError,IndexError):
+ pass
+PY
+}
+terminate_owned() {
+  local pid="$1" start="$2"
+  [[ -n "$pid" ]] || return 0
+  if [[ -n "$start" ]]; then
+    # A pidfd pins process identity; never kill a recycled numeric PID.
+    python3 - "$pid" "$start" <<'PY'
+import os,signal,sys
+pid=int(sys.argv[1]); expected=sys.argv[2]
+try:
+ fd=os.pidfd_open(pid)
+except (OSError,AttributeError):
+ sys.exit(0)
+try:
+ try:
+  with open(f"/proc/{pid}/stat",encoding="utf-8") as stream:
+   actual=stream.read().rsplit(")",1)[1].split()[19]
+  if actual==expected:
+   signal.pidfd_send_signal(fd,signal.SIGTERM)
+ except (OSError,IndexError,AttributeError,ProcessLookupError):
+  pass
+finally:
+ os.close(fd)
+PY
+  fi
+  wait "$pid" 2>/dev/null || :
+}
 cleanup() {
-  [[ -z "$TERN_PID" ]] || { kill "$TERN_PID" 2>/dev/null || :; wait "$TERN_PID" 2>/dev/null || :; }
-  [[ -z "$SWAY_PID" ]] || { kill "$SWAY_PID" 2>/dev/null || :; wait "$SWAY_PID" 2>/dev/null || :; }
+  terminate_owned "$TERN_PID" "$TERN_START"
+  terminate_owned "$SWAY_PID" "$SWAY_START"
 }
 trap cleanup EXIT
 printf '%s\n' "$SOURCE_SHA" >"$BASE/control/git-sha"
@@ -118,10 +175,21 @@ fi
 printf '%s\n' "$EVIDENCE_MODE" >"$BASE/control/evidence-mode"
 printf '%s\n' "$MODE" >"$BASE/control/mode"
 python3 - "$BASE" "$SOURCE_SHA" "$HASH" "$LOCATION" "$HASH_ORIGIN" "$PROVENANCE" "$SCOPE" "$MODE" <<'PY'
-import json,sys,uuid
+import json,os,stat,sys,uuid
 from pathlib import Path
 base,source,artifact,location,origin,provenance,scope,mode=sys.argv[1:]
 ctl=Path(base)/"control"
+# Local startup metadata is measured before launch, not inferred from Git.
+workspace=Path(base)/"workspace"
+sessions=Path(base)/"sessions"
+if location=="local" and mode!="replay":
+ for folder in (workspace,sessions):
+  info=folder.lstat()
+  if (not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.getuid() or
+      info.st_mode & 0o077 or any(folder.iterdir())):
+   raise SystemExit("local starting workspace/Session store is not empty and owner-only")
+workspace_start=({"empty":True,"prior_events":0} if location=="local" and mode!="replay"
+                 else {"empty":False,"prior_events":0 if location=="local" else None})
 (ctl/"launcher.json").write_text(json.dumps(dict(
  source_sha=source,artifact_sha256=artifact,location=location,
  hash_origin=origin,provenance=provenance),indent=2)+"\n")
@@ -129,7 +197,7 @@ ctl=Path(base)/"control"
  capture_id=str(uuid.uuid4()),scope=scope,
  model_id=("not-invoked-replay" if mode=="replay" else
            "tui-fixture/deterministic" if location=="local" else "remote-model-unverified"),
- workspace_start={"empty":location=="local","prior_events":0 if location=="local" else None},
+ workspace_start=workspace_start,
  collector="local-process" if location=="local" else "remote-uncollected",
  wire_file=("log/replay-source.jsonl" if mode=="replay" else
             "log/dsh-sdk-wire.jsonl" if location=="local" else None)),indent=2)+"\n")
@@ -147,7 +215,7 @@ SAFE_ENV=(
  "WLR_BACKENDS=headless" "WLR_RENDERER=pixman" "WLR_LIBINPUT_NO_DEVICES=1"
  "LANG=C.UTF-8" "TERM=xterm-256color"
  "DSH_HOME=$BASE/home/dsh" "DSH_AGENTS_HOME=$BASE/agents"
- "DSH_TUI_TEST_STORE=$BASE/sessions" "DSH_TELEMETRY_DISABLED=1"
+ "DSH_TUI_TEST_WORKSPACE=$WORKSPACE" "DSH_TUI_TEST_STORE=$BASE/sessions" "DSH_TELEMETRY_DISABLED=1"
  "DSH_TSP_RECORD=$BASE/log/metadata.jsonl"
  "DSH_TSP_RECORD_FULL=$BASE/log/dsh-sdk-wire.jsonl" "TERN_TSP=1"
 )
@@ -156,6 +224,8 @@ if [[ -n "${DSH_TUI_SWAY_LIBRARY_PATH:-}" ]]; then
 fi
 env -i "${SAFE_ENV[@]}" "$SWAY" --config "$BASE/sway.conf" >"$BASE/log/sway.log" 2>&1 &
 SWAY_PID=$!
+SWAY_START="$(process_start "$SWAY_PID")"
+[[ -n "$SWAY_START" ]] || { echo "cannot pin owned Sway start identity" >&2; exit 1; }
 FOUND=""
 for _ in {1..100}; do
  for sock in "$BASE/runtime"/wayland-*; do
@@ -187,6 +257,8 @@ CONTROL="$BASE/runtime/tern-private.sock"
 env -i "${SAFE_ENV[@]}" "$TERN" serve --control "$CONTROL" --out "$BASE/tern" \
  >"$BASE/log/tern-serve.log" 2>&1 &
 TERN_PID=$!
+TERN_START="$(process_start "$TERN_PID")"
+[[ -n "$TERN_START" ]] || { echo "cannot pin owned Tern start identity" >&2; exit 1; }
 for _ in {1..100}; do
  [[ ! -S "$CONTROL" ]] || break
  kill -0 "$TERN_PID" 2>/dev/null || { echo "owned Tern exited" >&2; exit 1; }
@@ -266,7 +338,7 @@ PY
 cat >"$BASE/launch-dsh.sh" <<EOF
 #!/usr/bin/env bash
 set -uo pipefail
-cd $(printf '%q' "$REPO")
+cd $(printf '%q' "$WORKSPACE")
 EOF
 if [[ -z "$LAUNCHER" ]]; then
  printf 'node %q --profile tui --patch %q\n' "$CLI" \
