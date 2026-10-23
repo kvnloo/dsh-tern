@@ -36,6 +36,7 @@ export function abortableAnswer(
     const aborted = (): void => finish(null)
     signal?.addEventListener('abort', aborted, { once: true })
     unregister = receive(finish)
+    if (settled) unregister()
     if (signal?.aborted) finish(null)
   })
 }
