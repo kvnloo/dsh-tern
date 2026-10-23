@@ -2,11 +2,43 @@
  * Test-only public tool provider. The real tools registry and ApprovalService
  * own dispatch and decisions; this provider performs no shell execution.
  */
+import { existsSync, watch } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-user-approval'
+
+/**
+ * Explicit, test-only handoff: the real tool is already running, but the
+ * approval has not yet taken composer ownership. No timeouts or polling.
+ * The private PTY driver atomically creates a release file after real keys
+ * have populated the draft and moved its caret.
+ */
+async function approvalBarrier(workspace: string, signal: AbortSignal): Promise<void> {
+  const release = join(workspace, 'approval-release.barrier')
+  await writeFile(join(workspace, 'approval-waiting.barrier'), 'waiting\n', {
+    mode: 0o600, flag: 'wx',
+  })
+  await new Promise<void>((resolve, reject) => {
+    let settled = false
+    const watcher = watch(workspace, () => {
+      if (existsSync(release)) finish()
+    })
+    const abort = (): void => { finish(new Error('fixture approval barrier aborted')) }
+    const finish = (error?: Error): void => {
+      if (settled) return
+      settled = true
+      watcher.close()
+      signal.removeEventListener('abort', abort)
+      if (error) reject(error)
+      else resolve()
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
+    else if (existsSync(release)) finish()
+  })
+}
 
 export const name = 'tui-fixture-tools'
 export const inject = ['tools', 'approval']
@@ -37,6 +69,9 @@ export function apply(ctx: Context): void {
       const workspace = process.env.DSH_TUI_TEST_WORKSPACE
       if (!workspace || !isAbsolute(workspace)) {
         throw new Error('fixture effect requires an absolute isolated DSH_TUI_TEST_WORKSPACE')
+      }
+      if (process.env.DSH_TUI_APPROVAL_BARRIER === '1') {
+        await approvalBarrier(workspace, exec.signal)
       }
       const result = await ctx.approval.request({
         agent: exec.agent,
