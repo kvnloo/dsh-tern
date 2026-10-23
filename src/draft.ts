@@ -74,7 +74,7 @@ export class Draft {
     if (key.name === 'left') { this.caret = prev(); return this.caret !== at }
     if (key.name === 'right') { this.caret = next(); return this.caret !== at }
     if (key.name === 'home' || (key.ctrl && key.name === 'a')) {
-      this.caret = before.lastIndexOf('\n', Math.max(0, at - 1)) + 1
+      this.caret = at === 0 ? 0 : before.lastIndexOf('\n', at - 1) + 1
       return this.caret !== at
     }
     if (key.name === 'end' || (key.ctrl && key.name === 'e')) {
@@ -83,7 +83,7 @@ export class Draft {
       return this.caret !== at
     }
     if (key.name === 'up' || key.name === 'down') {
-      const start = before.lastIndexOf('\n', Math.max(0, at - 1)) + 1
+      const start = at === 0 ? 0 : before.lastIndexOf('\n', at - 1) + 1
       const col = at - start
       if (key.name === 'up') {
         if (!start) return false
