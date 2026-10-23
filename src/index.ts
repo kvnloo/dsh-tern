@@ -66,40 +66,6 @@ function* readEvents(session: Session): Generator<SessionEvent> {
   }
 }
 
-async function startAgent(ctx: Context, id: SessionId): Promise<Agent> {
-  const agents = ctx.get('agents')
-  const model = ctx.get('agentDefaultModel')
-  if (!agents || !model) throw new Error('TUI requires agents and agentDefaultModel')
-  const selection = model.currentSelection()
-  const agentOptions = { provider: selection.provider, model: selection.model }
-  const setup = (agentCtx: Context): void => {
-    const selected: ModelSelectionRef = { current: selection, assembled: undefined }
-    installModelSelection(agentCtx, selected)
-  }
-  const fs = ctx.get('fs')
-  const cwd = fs === undefined ? process.cwd() : fs.processPath(await fs.resolve('.'))
-  if (!ctx.get('tuiStartup') && !ctx.get('appExit')) throw new Error('TUI must be launched through dsh')
-  if (!ctx.get('tuiStartup')?.sessionId) {
-    return (await agents.create({ sessionId: id, meta: { cwd }, agentOptions, setup })).agent
-  }
-  if (!ctx.get('sessionPersistence')) throw new Error('resuming requires the sessionPersistence service')
-  const query = ctx.get('sessionQuery')
-  if (!query) throw new Error('resuming requires the sessionQuery service')
-  if (agents.get(id)) throw new Error('session ' + id + ' already has a live Agent')
-  try {
-    using observed = await query.observeSession(id)
-    assertRootSession(observed.header, observed.events, id, cwd)
-    const { agent } = await agents.resume({ resumeSessionId: id, agentOptions, setup })
-    assertRootSession(agent.session.header, readEvents(agent.session), id, cwd)
-    return agent
-  } catch (error) {
-    if (error instanceof SessionQueryError && error.code === 'SESSION_QUERY_SESSION_NOT_FOUND') {
-      throw new Error('session ' + id + ' does not exist')
-    }
-    throw error
-  }
-}
-
 /** One interactive invocation. Terminal callbacks only send through Agent APIs. */
 async function run(ctx: Context, config: Config): Promise<void> {
   await ctx.get('loader')?.await()
