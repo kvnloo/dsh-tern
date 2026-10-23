@@ -48,8 +48,17 @@ class TuiFixtureAdapter extends LlmAdapter {
       // Agent on cancel. A provider failure remains an uncommitted attempt.
       // No delay/retry: the real caller's abort is the only release condition.
       if (!options.signal.aborted) {
-        await new Promise<void>(resolve =>
-          options.signal!.addEventListener('abort', () => resolve(), { once: true }))
+        await new Promise<void>(resolve => {
+          const signal = options.signal!
+          const release = (): void => { resolve() }
+          signal.addEventListener('abort', release, { once: true })
+          // A cancellation between the initial check and listener registration
+          // must also unblock the real Agent's interrupted-stream path.
+          if (signal.aborted) {
+            signal.removeEventListener('abort', release)
+            resolve()
+          }
+        })
       }
       return
     }
