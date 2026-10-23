@@ -81,14 +81,14 @@ describe('native inline Tern UI public SDK', () => {
     await f.terminal.start(() => {}, () => {}, () => {})
     f.terminal.update(snapshot)
     const editor = f.frames.at(-1)!.dock.flatMap(node => collect(node, 'editor'))[0]!
-    const write = editor.props.onEdit as (e: unknown) => void
+    const write = editor.handlers?.onEdit as (e: unknown) => void
     write({ from: 0, to: 0, text: 'unsent draft', cursor: 12, len: 0 })
     const answer = f.terminal.ask({ title: 'Describe' })
     const input = f.frames.at(-1)!.layer.flatMap(node => collect(node, 'editor'))[0]!
     const onEdit = input.handlers?.onEdit as (e: unknown) => void
     onEdit({ from: 0, to: 0, text: 'response', cursor: 8, len: 0 })
     const current = f.frames.at(-1)!.layer.flatMap(node => collect(node, 'editor'))[0]!
-    const onSend = current.props.onSend as (e: { text: string }) => void
+    const onSend = current.handlers?.onSend as (e: { text: string }) => void
     onSend({ text: 'response' })
     expect(await answer).toBe('response')
     const resumed = f.frames.at(-1)!.dock.flatMap(node => collect(node, 'editor'))[0]!
