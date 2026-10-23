@@ -122,7 +122,7 @@ export class NativeTerminal implements Terminal {
 
   private renderEntry(entry: Entry): unknown {
     if (entry.kind === 'tool' || entry.kind === 'error') {
-      return this.node('card', { key: entry.id, role: 'dsh.tool', tone: entry.kind === 'error' ? 'error' : 'neutral' }, [
+      return this.node('card', { key: entry.id, role: 'dsh.tool', tone: entry.kind === 'error' ? 'error' : 'muted' }, [
         this.node('text', { key: 'result', text: entry.text, wrap: 'word' }),
       ])
     }
@@ -177,7 +177,7 @@ export class NativeTerminal implements Terminal {
     if (this.prompt) {
       const prompt = this.prompt
       const options = prompt.request.choices
-      layer.push(this.node('card', { key: 'question', role: 'dsh.question', tone: 'neutral' }, [
+      layer.push(this.node('card', { key: 'question', role: 'dsh.question', tone: 'muted' }, [
         this.node('text', { key: 'title', text: prompt.request.title, wrap: 'word' }),
         ...(prompt.request.detail ? [this.node('md', { key: 'detail' }, [prompt.request.detail])] : []),
         ...(options ?? []).map((choice, i) => this.node('button', {
