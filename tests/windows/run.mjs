@@ -97,6 +97,9 @@ function backendCheck() {
   requireGate(existsSync(join(host, 'apps', 'cli', 'lib', 'bin.js')),
     'built real DSH host CLI missing')
   requireGate(statSync(archive).isFile() && archive.endsWith('.tgz'), 'packed plugin artifact missing')
+  const sdkPatchSha256 = sha256(join(root, 'patches', '@stencil-hq__tern@0.1.0.patch'))
+  requireGate(sdkPatchSha256 === 'c222b3495ade7f7b334ae4f5f94be05b2b4edb2764645dd1972f90ad436e0998',
+    'qualified production SDK patch SHA256 changed')
   evidence.inputs = {
     pluginRepository: 'kvnloo/dsh-tern',
     pluginGitSha: commit,
@@ -104,7 +107,7 @@ function backendCheck() {
     hostRepository: 'kvnloo/deepseek-harness',
     hostGitSha: expectedHost,
     hostTrackedClean: true,
-    sdkPatchSha256Expected: 'c222b3495ade7f7b334ae4f5f94be05b2b4edb2764645dd1972f90ad436e0998',
+    sdkPatchSha256,
   }
   evidence.backend = {
     platform: process.platform, arch: process.arch,
