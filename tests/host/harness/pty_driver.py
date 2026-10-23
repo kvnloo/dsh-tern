@@ -70,6 +70,7 @@ class Driver:
         self.events: list[dict] = []
         self.frames: list[dict] = []
         self.actions: dict[str, str] = {}
+        self.answer_id: str | None = None
         self.actions_sent: list[dict] = []
         self.captures: dict[str, dict] = {}
         self.last_wait_end = 0
@@ -116,6 +117,10 @@ class Driver:
             label, ident = props.get("text"), document.get("id")
             if isinstance(label, str) and isinstance(ident, str) and ident.startswith("layer."):
                 self.actions[label] = ident
+        if document.get("k") in ("editor", "input"):
+            ident = document.get("id")
+            if isinstance(ident, str) and ident.startswith("layer."):
+                self.answer_id = ident
         children = document.get("c")
         if isinstance(children, list):
             for child in children:
@@ -186,6 +191,13 @@ class Driver:
                 self.captures[str(step["capture"])] = {
                     "byte_offset": len(self.raw), "frame_count": len(self.frames),
                 }
+            elif "answer" in step:
+                if self.answer_id is None:
+                    raise AssertionError("question editor missing in real emitted SDK document")
+                self.actions_sent.append({"label": "answer", "id": self.answer_id})
+                self.send(frame("e", {
+                    "ev": "send", "sf": "dsh", "id": self.answer_id, "text": str(step["answer"]),
+                }))
             elif "action" in step:
                 wanted = str(step["action"])
                 matches = [(key, value) for key, value in self.actions.items()
