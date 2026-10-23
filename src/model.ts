@@ -13,8 +13,25 @@ export interface Entry {
   readonly text: string
 }
 
+/** Current public-service facts, never synthetic progress or model history. */
+export interface ProductState {
+  readonly model?: { readonly provider: string; readonly model: string }
+  readonly plan?: { readonly active: boolean; readonly pending?: boolean }
+  readonly tasks?: readonly { readonly id: string; readonly text: string; readonly status: string }[]
+  readonly jobs?: readonly {
+    readonly id: string; readonly label: string; readonly status: string
+    readonly progress?: string; readonly detail?: string
+  }[]
+  readonly children?: readonly {
+    readonly id: string; readonly parentId: string; readonly depth: number
+    readonly label: string; readonly mode: string; readonly activity: string
+  }[]
+  readonly detail?: { readonly id: string; readonly title: string; readonly text: string }
+}
+
 export interface Snapshot {
   readonly sessionId: string
+  readonly product?: ProductState
   readonly entries: readonly Entry[]
   readonly live: string
   readonly liveId?: string
@@ -178,9 +195,10 @@ export class Transcript {
    * Ordinary snapshots cap screen work; the interactive renderer requests the
    * complete durable projection so history is never silently erased.
    */
-  snapshot(options: { all?: boolean } = {}): Snapshot {
+  snapshot(options: { all?: boolean; product?: ProductState } = {}): Snapshot {
     return {
       sessionId: this.sessionId,
+      ...(options.product === undefined ? {} : { product: options.product }),
       entries: options.all ? [...this.rows] : this.rows.slice(-MAX_ENTRIES),
       live: this.preview,
       ...(this.previewId ? { liveId: this.previewId } : {}),
