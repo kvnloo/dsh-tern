@@ -134,6 +134,19 @@ describe('native-profile RED behavioral witnesses against the real SDK decoder',
     await f.term.closed()
   })
 
+  it('reports native protocol failures to the owning lifecycle instead of silently exiting zero', async () => {
+    const f = terminalFixture()
+    let failure: Error | undefined
+    await f.term.start(() => {}, () => {}, error => { failure = error })
+    f.term.update(empty)
+    f.push({ type: 'event', event: {
+      ev: 'error', sf: 'dsh', msg: 'invalid frame', raw: {},
+    } })
+    await f.drain()
+    expect(failure?.message).toContain('invalid frame')
+    await f.term.closed()
+  })
+
   it('does not leave a cancelled outstanding tool marked running', () => {
     const history = new Transcript('session')
     history.accept({ seq: 0, type: 'tool/call', time: 0, data: {
