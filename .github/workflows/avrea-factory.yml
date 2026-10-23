@@ -1,0 +1,143 @@
+name: Avrea factory verification
+'on':
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Use Avrea or an identical-scope GitHub-hosted control
+        type: choice
+        options:
+        - avrea
+        - github
+        default: avrea
+        required: true
+permissions:
+  contents: read
+jobs:
+  windows-native-conpty:
+    name: Exact-head packed host/plugin through OS ConPTY
+    runs-on: ${{ inputs.provider == 'avrea' && 'avrea-windows-2025-4-vcpu' || 'windows-latest' }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+    - name: Checkout exact plugin head (read only)
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Checkout unmodified pinned DSH host (read only)
+      uses: actions/checkout@v4
+      with:
+        repository: kvnloo/deepseek-harness
+        ref: 5badb15009ae1756c3afe0ae0cef1faafc290ccc
+        path: _host
+        persist-credentials: false
+    - name: Install pinned pnpm 11.7.0
+      uses: pnpm/action-setup@v4
+      with:
+        version: 11.7.0
+        run_install: false
+    - name: Install pinned Node 24.11.0
+      uses: actions/setup-node@v4
+      with:
+        node-version: 24.11.0
+    - name: Assert exact Git inputs and unmodified host
+      env:
+        EXPECT_PLUGIN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: 'if ((git rev-parse HEAD).Trim() -ne $env:EXPECT_PLUGIN_SHA) { throw ''Plugin Git HEAD mismatch'' }
+
+        if ((git -C _host rev-parse HEAD).Trim() -ne ''5badb15009ae1756c3afe0ae0cef1faafc290ccc'') { throw ''Host Git HEAD
+        mismatch'' }
+
+        if (@(git -C _host status --porcelain --untracked-files=no).Count -gt 0) { throw ''Host checkout is modified'' }
+
+        if ((node --version) -ne ''v24.11.0'') { throw ''Node version changed'' }
+
+        if ((pnpm --version) -ne ''11.7.0'') { throw ''pnpm version changed'' }
+
+        '
+    - name: Frozen host dependency installation
+      working-directory: _host
+      run: 'pnpm install --frozen-lockfile
+
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        '
+    - name: Build real pinned DSH host CLI and services
+      working-directory: _host
+      run: 'pnpm run gen-tsconfig-paths
+
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        pnpm run build
+
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        '
+    - name: Frozen standalone plugin dependency installation
+      run: 'pnpm install --frozen-lockfile
+
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        '
+    - name: Verify exact SDK patch, build and pack external plugin
+      run: 'pnpm run verify:patch
+
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        pnpm run build
+
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        pnpm run typecheck
+
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        $packDir = Join-Path $env:RUNNER_TEMP ''dsh-conpty-packed''
+
+        New-Item -ItemType Directory -Force -Path $packDir | Out-Null
+
+        pnpm pack --pack-destination $packDir
+
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        $archives = @(Get-ChildItem -LiteralPath $packDir -Filter ''*.tgz'' -File)
+
+        if ($archives.Count -ne 1) { throw ''Expected exactly one built/packed external plugin'' }
+
+        "DSH_WINDOWS_ARCHIVE=$($archives[0].FullName)" >> $env:GITHUB_ENV
+
+        '
+    - name: Install isolated pinned real node-pty OS ConPTY backend
+      run: 'npm install --prefix tests/windows --no-save --no-package-lock --no-audit --no-fund
+
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        npm ls --prefix tests/windows --depth=0 node-pty node-addon-api
+
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        '
+    - name: Real OS ConPTY / packed host / Session / OSC877 gate
+      env:
+        DSH_WINDOWS_EXPECT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: '$receipt = Join-Path $env:RUNNER_TEMP ''dsh-conpty-receipt''
+
+        New-Item -ItemType Directory -Force -Path $receipt | Out-Null
+
+        node tests/windows/run.mjs --host (Join-Path $env:GITHUB_WORKSPACE ''_host'') --archive $env:DSH_WINDOWS_ARCHIVE --out
+        $receipt
+
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        '
+    - name: Upload strictly allowlisted synthetic phase receipt only
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-conpty-synthetic-receipt
+        path: ${{ runner.temp }}/dsh-conpty-receipt/summary.json
+        if-no-files-found: ignore
+        retention-days: 7

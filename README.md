@@ -65,3 +65,14 @@ The packed consumer gate checks built-to-packed bytes, installs in a fresh npm c
 - [Authoritative RFC #6](https://github.com/kvnloo/deepseek-harness/issues/6) and [standalone tracking issue #1](https://github.com/kvnloo/dsh-tern/issues/1) define acceptance.
 
 This extracted package is **not yet certified**. OMP still must generate canonical lock/language records, execute the full exact-head MBP gates, and complete signed-window native pointer/approval/detach, owned daemonless API submission and Hermes/OMP differential capture. Tern 0.9.5 daemon-backed `cx.session:event` reports `no program runs in that pane` despite a working native UI; do **not** infer a passing daemon-backed API test from native UI success.
+
+## Downstream Avrea CI
+
+The downstream `ci/avrea-conpty-factory-20261023` branch routes standalone Linux
+qualification and native Windows ConPTY acceptance to 4-vCPU Avrea runners.
+`avrea-factory.yml` preserves the full Windows acceptance job, its immutable
+host pin, exact-head checks, packed-plugin assertions, native OS ConPTY
+backend, and synthetic receipt allowlist. Dispatch `provider=github` for an
+identical-command control, then `provider=avrea` twice on the unchanged head.
+Runner provisioning or a successful build alone does not certify ConPTY
+acceptance; the original native assertion and receipt steps must pass.

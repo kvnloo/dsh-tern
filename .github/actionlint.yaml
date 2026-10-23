@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+  - avrea-ubuntu-latest-4-vcpu
+  - avrea-windows-2025-4-vcpu

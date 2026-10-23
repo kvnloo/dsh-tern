@@ -1,6 +1,7 @@
 name: standalone DSH Tern qualification
 
 on:
+  workflow_dispatch:
   push:
     branches: ['**']
   pull_request:
@@ -10,7 +11,7 @@ permissions:
 
 jobs:
   standalone:
-    runs-on: ubuntu-24.04
+    runs-on: avrea-ubuntu-latest-4-vcpu
     timeout-minutes: 90
     steps:
       - name: Checkout exact plugin head
