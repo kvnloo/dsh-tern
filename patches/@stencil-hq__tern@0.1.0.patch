@@ -12,3 +12,112 @@ diff --git a/src/wire.ts b/src/wire.ts
        case 'hello':
 +         if (num(raw, 'v') !== PROTOCOL_VERSION) return { r: 'unknown', raw };
           return {
+diff --git a/src/surface.ts b/src/surface.ts
+--- a/src/surface.ts
++++ b/src/surface.ts
+@@ -6,1 +6,2 @@
+-import { View, type Renderable } from './reconcile.js';
++import { View, type Renderable, type Tree } from './reconcile.js';
++import { Node } from './nodes.js';
+@@ -84,1 +84,2 @@
++   #ackListeners = new Set<(sequence: number) => void>();
+    #queue: Op[] = [];
+@@ -129,1 +129,35 @@
++   /** Forget only renderer snapshots for terminal-retired ids (no wire del). */
++   forget(ids: readonly string[]): void {
++      if (this.#closed || ids.length === 0) return;
++      const gone = (id: string | null | undefined): boolean =>
++         typeof id === 'string' && ids.some(evicted => id === evicted || id.startsWith(evicted + '.'));
++      const prune = (view: View): View => {
++         const copy = (tree: Tree): Node | undefined => {
++            if (gone(tree.id)) return undefined;
++            const children = tree.children.map(copy).filter((child): child is Node => child !== undefined);
++            if (children.length === tree.node.children.length
++               && children.every((child, i) => child === tree.node.children[i])) return tree.node;
++            return new Node(tree.kind, tree.node.props, children, tree.node.handlers);
++         };
++         return View.from({
++            main: view.regions[0] ? copy(view.regions[0]) : undefined,
++            dock: view.regions[1] ? copy(view.regions[1]) : undefined,
++            layer: view.regions[2] ? copy(view.regions[2]) : undefined,
++         });
++      };
++      this.#sent = prune(this.#sent);
++      this.#latest = prune(this.#latest);
++      if (this.#pending) this.#pending = prune(this.#pending);
++      this.#queue = this.#queue.filter(op => {
++         if (op[0] === 'add' || op[0] === 'move')
++            return !gone(op[1]) && !gone(op[2]) && !gone(op[3]);
++         return op.length < 2 || !gone(op[1]);
++      });
++   }
++
++   /** Invoked after a real terminal ACK is applied, including credit release. */
++   onAck(listener: (sequence: number) => void): () => void {
++      this.#ackListeners.add(listener);
++      return () => { this.#ackListeners.delete(listener); };
++   }
+    /** Installs (or with `null` removes) stylesheet `name`. */
+@@ -214,1 +214,2 @@
+-      this.#pump();
++      this.#pump();
++      for (const listener of this.#ackListeners) listener(this.#acked);
+diff --git a/dist/surface.js b/dist/surface.js
+--- a/dist/surface.js
++++ b/dist/surface.js
+@@ -6,1 +6,2 @@
+-import { View } from './reconcile.js';
++import { View } from './reconcile.js';
++import { Node } from './nodes.js';
+@@ -66,1 +66,2 @@
++    #ackListeners = new Set();
+     #queue = [];
+@@ -120,1 +120,34 @@
++    /** Forget only renderer snapshots for terminal-retired ids (no wire del). */
++    forget(ids) {
++        if (this.#closed || ids.length === 0) return;
++        const gone = (id) => typeof id === 'string' && ids.some(evicted => id === evicted || id.startsWith(evicted + '.'));
++        const prune = (view) => {
++            const copy = (tree) => {
++                if (gone(tree.id)) return undefined;
++                const children = tree.children.map(copy).filter(child => child !== undefined);
++                if (children.length === tree.node.children.length
++                    && children.every((child, i) => child === tree.node.children[i])) return tree.node;
++                return new Node(tree.kind, tree.node.props, children, tree.node.handlers);
++            };
++            return View.from({
++                main: view.regions[0] ? copy(view.regions[0]) : undefined,
++                dock: view.regions[1] ? copy(view.regions[1]) : undefined,
++                layer: view.regions[2] ? copy(view.regions[2]) : undefined,
++            });
++        };
++        this.#sent = prune(this.#sent);
++        this.#latest = prune(this.#latest);
++        if (this.#pending) this.#pending = prune(this.#pending);
++        this.#queue = this.#queue.filter(op => {
++            if (op[0] === 'add' || op[0] === 'move')
++                return !gone(op[1]) && !gone(op[2]) && !gone(op[3]);
++            return op.length < 2 || !gone(op[1]);
++        });
++    }
++
++    /** Invoked after a real terminal ACK is applied, including credit release. */
++    onAck(listener) {
++        this.#ackListeners.add(listener);
++        return () => { this.#ackListeners.delete(listener); };
++    }
+     /** Installs (or with `null` removes) stylesheet `name`. */
+@@ -187,1 +187,2 @@
+-        this.#pump();
++        this.#pump();
++        for (const listener of this.#ackListeners) listener(this.#acked);
+diff --git a/dist/surface.d.ts b/dist/surface.d.ts
+--- a/dist/surface.d.ts
++++ b/dist/surface.d.ts
+@@ -69,1 +69,5 @@
+-    render(view: Renderable): void;
++    render(view: Renderable): void;
++    /** Forget renderer references to gone ids without sending deletes. */
++    forget(ids: readonly string[]): void;
++    /** Subscribe to real terminal acknowledgements. */
++    onAck(listener: (sequence: number) => void): () => void;
