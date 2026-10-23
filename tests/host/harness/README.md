@@ -13,9 +13,13 @@ git fetch origin tern/native-profile
 git switch tern/native-profile
 git rev-parse HEAD
 corepack pnpm install --frozen-lockfile
-corepack pnpm run build:lib
+# For the private_tern.sh default built-CLI path: run the COMPLETE root
+# build on MBP under the fleet build lock, then release it before native runs.
+# A build:lib-only CLI lacks the checked .dsh-build/client-build-environment.json.
+corepack pnpm run build
 python3 -m py_compile apps/cli/tests/profiles/tui/harness/*.py
 bash -n apps/cli/tests/profiles/tui/harness/private_tern.sh
+corepack pnpm exec vitest run packages/bundle/tui-app/tests/harness-evidence.spec.ts
 corepack pnpm exec vitest run packages/bundle/tui-app/tests/transport-conformance.spec.ts packages/bundle/tui-app/tests/native-pty.spec.ts
 corepack pnpm exec vitest run --config vitest.e2e.config.ts apps/cli/tests/profiles/tui/tests/keyless.e2e.ts
 DSH_EXAMPLE_MODE=lib corepack pnpm exec vitest run --config vitest.e2e.config.ts apps/cli/tests/profiles/tui/tests/keyless.e2e.ts
@@ -43,7 +47,7 @@ python3 apps/cli/tests/profiles/tui/harness/evidence_bundle.py \
   --out /tmp/dsh-native-evidence.tar.gz
 ~~~
 
-The live runner starts actual pnpm dsh --profile tui in a private Tern pane, splits a log pane, types and atomically sends deterministic fixture prompts, injects [failure], resizes, changes focus, switches away and back, and captures stable semantic tree IDs, dump geometry, CSS, state, accessibility tree, screenshots, SDK JSONL, process logs, Tern binary hash, exact Git SHA and command replies. Each tern ctl call reconnects the control client. That does not prove a cold daemon/PTY detach and reattach; OMP must run and capture that separately.
+The local live runner starts the **actual built** CLI with the absolute keyless fixture patch from a verified fresh, owner-only empty workspace (`DSH_TUI_TEST_WORKSPACE`). It performs ordinary Tern key/Enter submissions for the alpha/beta/failure fixture, not a native `e/send` proof, and terminates using local `/quit` with a measured exit 0. It captures Tern state/tree/CSS, SDK JSONL and actual Session JSONL; split, focus, resize and re-show remain distinct visual checks. Both the complete root build record and built CLI hash are required for the default local path. The runner never builds or installs on groot and does not prove cold daemon restart, dispatcher semantics, host pointer input or model quality.
 
 Full SDK JSONL contains private prompts/output and stays only in the owner-only archive, with durable Session records, screenshots, raw logs and file hashes. The evidence generator fails on symlink/world-readable inputs, creates a content-free redacted-wire.jsonl (direction, verb, byte count and SHA-256 only), adds a provenance manifest, and never uploads.
 
@@ -56,11 +60,11 @@ python3 apps/cli/tests/profiles/tui/harness/evidence_bundle.py \
   --out /tmp/dsh-replay-only.tar.gz
 ~~~
 
-Replay uses Tern surface-play rather than starting dsh; the manifest marks source_kind surface-replay. It does not prove startup, model/services, raw input parsing, TTY cleanup, or a real Hermes differential.
+Replay uses Tern `surface-play` rather than starting dsh; `source_kind` stays `surface-replay`. A complete recording may have removed its live composer after `out/x`; replay readiness therefore requires retained main semantic identities/state rather than a dock. If the terminal has no retained main state, refuse; for subrange inspection use Tern's documented `surface-play` range option, explicitly record any cutoff and NEVER relabel the shortened replay as a complete live run. Replay does not prove process startup, Session model/services, input parsing, TTY cleanup or Hermes parity.
 
 ## Executable Hermes / OMP differential
 
-Use the same exact Tern CLI binary SHA256/version for two **live** captures. The local DSH fixture prompts are in differential_prompts.json: alpha, atomic fixture, [failure]. For the second capture run the *actual* kvnloo/hermes-tern integration with real Hermes launcher (hermes tern) against a deterministic, local-only gateway fixture that answers the same prompts, or an actual OMP Tern frontend against a similarly fixture-backed service. Use a separate private home/socket/daemon, set TERN_TSP_RECORD to private JSONL, keep its full logs and screenshots, and write a manifest with mode live, git_sha and the identical tern_build string. Do not run live provider inference. If no real fixture-backed peer is available, mark this gate BLOCKED rather than passing against a renderer fake or recorded golden.
+Compare only **startup-no-prompt** captures from real DSH and real Hermes/OMP processes, each in a separate freshly empty workspace and private daemon. Both manifests must attest exact Git SHAs, capture IDs, model IDs, the **same exact Tern CLI version and binary SHA256**, and the SHA256 of their independently recorded SDK JSONL. No prompt list is read by this command and no user/model reply parity is claimed. An unavailable fixture-backed peer is **BLOCKED**, not substituted with renderer-generated JSON or golden replay. For full native behavior use independent functional Session and `e/send` evidence, not this startup oracle.
 
 ~~~sh
 python3 apps/cli/tests/profiles/tui/harness/compare_wire.py \
@@ -68,17 +72,26 @@ python3 apps/cli/tests/profiles/tui/harness/compare_wire.py \
   --peer /private/hermes/sdk-wire.jsonl \
   --dsh-manifest /private/dsh/manifest.json \
   --peer-manifest /private/hermes/manifest.json \
-  --fixture apps/cli/tests/profiles/tui/harness/differential_prompts.json \
   --out /private/differential.json
 ~~~
 
-This fails on replay-only manifests, differing Tern builds, missing live program open or frame events, nonmonotonic frame sequences, absent exact fixture prompts, semantic IDs or role evidence. It reports each app's actual node identities/kinds/roles for comparison with Tern tree and CSS; it does not claim identical code or model behavior.
+This requires an observed `q.v:[1]` plus program `q.features:[edit,undo,send]`, an offered `r.v:1`, terminal editor/input kinds and terminal-owned (NOT edit/send) `r.features`. It accepts SDK `b` with base64 body and `params.id/mime`, and four-field `[text,id,replace|append,value]` operations. Complete startup must include real `out/x` CLOSE; already-in-flight valid cumulative ACKs may drain after close, but frames after close, over-credit, error events, bad/missing nodes or forged manifest terminal versions **fail**. CLI `Tern 0.9.5` and SDK `r.ver:"0.9.5"` normalize to the same version; hashes and complete version provenance remain exact. The oracle reports actual semantic IDs and credit summaries, **not native send, model/response quality, roles or functional parity**.
 
 ## Scope, remaining gates and platform constraints
 
 This branch slice owns ONLY apps/cli/tests/profiles/tui/** plus the new packages/bundle/tui-app/tests/native-pty.spec.ts and transport-conformance.spec.ts. Source runtime, package manifests and existing package tests belong to SERVICES. Next owned test slices: tool call/result/error and live/durable reconciliation; approval and question competing with a half-written draft; cancellation/EOF/crash status recovery; true cold-daemon restart/resume; private real Hermes/OMP fixture differential. Any source defect must be fixed by the separate SERVICES chat, never hidden in test code.
 
 APC/OSC 877 coverage through the JS SDK is not evidence of native Windows ConPTY/Win32 behavior. The lead owns MBP native smoke and any Windows/ConPTY gate; parser-only tests cannot certify them.
+
+## TRN13 corrected evidence contract (connector-authored, unrun)
+
+Local runs measure an empty, mode-0700 `workspace/` **and** empty `sessions/` before launch. The generated launch script changes to that workspace, **not** the repository root, while using absolute built CLI and patch paths. The keyless fixture receives `DSH_TUI_TEST_WORKSPACE`. Local default launch refuses missing/stale `.dsh-build/client-build-environment.json`, a mismatching source commit prefix or package version, changed recorded client artifacts, dirty-at-build metadata, or a CLI newer than its build record. An override remains explicitly attested; remote-without-copied-evidence is `remote-uncollected`, not local proof. Tern path arguments are escaped for its scenario parser as well as the shell, remote readiness is retried only within the existing 45-second deadline, and cleanup uses verified child start identities plus Linux pidfd signalling so a recycled PID is never killed.
+
+The archive sealer copies approved inputs to an invocation-owned private snapshot, fixes hashes **before** redaction, and revalidates them afterward and against completed tar bytes. It rejects even remote-LIVE `log/replay-source.jsonl`, symlink/path containment bypasses, malformed or non-owner-only inputs, and every overwrite. It never reads `runtime/`, `home/`, `cache/`, credentials, sockets or unknown files. The synthetic unit suite exercises a mutation after the redaction read, symlinked ancestor, replay smuggling, valid SDK BLOB/close, cumulative late ACK and the strict negative cases. **Synthetic unit success is not native proof.**
+
+For a separate, true native semantic send witness, the lead qualified **Tern 0.9.5's local Window Event API** through `tern ctl carly lua` and the documented `cx.session:event(PANE,{ev="send",sf=SF,id=EDITOR,text=TEXT})`. PANE, SF and EDITOR must come from the **current live** private Tern pane/editor, with the exact submitted TEXT checked against real persisted DSH Session events. This is a Tern window event, **not** proof of Carly's agent dispatcher. Do not use an IME commit as a stand-in for atomic send. `/quit` is local teardown, not a provider/model prompt. The lead previously observed three exact echoes including multiline Unicode, Shift+ArrowLeft from 15 to 16 replacing with Z at length 16, Meta+z undo, correct same/different draft clearing and genuine `/quit` exit 0 at **b675f23c39375c8081709eb017d4d865affe7e06**, raw SDK SHA256 **3af780f622be7c1f60ccf44fb882403c462585befad0e03d812b209de030f0eb**. Those historical results are NOT certified at the combined current head; the f36/ACK33/credits2 close-credit defect is a runtime RED owned by TRN12, not a comparator exception.
+
+Run private native steps only under the lead's owned headless Sway automation instructions, after MBP build locks are released. Do not attach to any host display/daemon or use real keys. Required new tests and static checks are listed at the beginning of this README; native `startup`, `live`, `replay`, `compare_wire.py` and `evidence_bundle.py` must be executed separately with recorded exit codes on the **combined exact head**. The remaining acceptance includes physical PTY/Session and native window events, pointer pick/click, cold daemon detach/restart, and independent real Hermes/OMP differential.
 
 ## TRN6 public-service acceptance (strict, connector-authored, UNRUN)
 
