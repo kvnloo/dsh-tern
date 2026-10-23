@@ -205,6 +205,77 @@ describe('RFC #6 synthetic startup protocol validator (NOT parity proof)', () =>
     expect(diff(dsh, peer).status).toBe(0)
   })
 
+  it('accepts real-SDK-shaped frame2 focus and null-unfocus (synthetic, NOT b675 replay)', () => {
+    const root = workspace()
+    const dsh = captured(root, 'dsh')
+    const peer = captured(root, 'hermes')
+    // The retained b675 recording actually has ["focus","dock.composer.line.input"]
+    // in frame2. These rows are constructed UNIT data, never the retained capture.
+    const focusId = 'dock.composer.line.input'
+    body(peer.events[4]!)['ops'][0][4].c.push({ id: focusId, k: 'input', p: { value: '' } })
+    peer.events.splice(6, 0,
+      { dir: 'out', verb: 'f', body: { sf: 'hermes', s: 2,
+        ops: [['focus', focusId], ['focus', null]] } },
+      { dir: 'in', verb: 'e', body: { ev: 'ack', sf: 'hermes', s: 2 } },
+    )
+    peer.persist()
+    const result = diff(dsh, peer)
+    expect(result.status, result.stderr).toBe(0)
+  })
+
+  it('accepts all typed public SDK op families plus credits=2/cumulative ACK', () => {
+    const root = workspace()
+    const dsh = captured(root, 'dsh')
+    const peer = captured(root, 'hermes')
+    body(dsh.events[1]!)['credits'] = 2
+    body(peer.events[1]!)['credits'] = 2
+    const ack = peer.events.splice(5, 1)[0]!
+    body(ack)['s'] = 2
+    peer.events.splice(5, 0,
+      { dir: 'out', verb: 'f', body: { sf: 'hermes', s: 2, ops: [
+        ['set', 'hermes.message', { text: 'Updated' }],
+        ['splice', 'hermes.message', 0, 0, 'Start '],
+        ['move', 'hermes.editor', 'main', null],
+        ['reveal', 'hermes.editor', 'nearest'],
+        ['scroll', 'hermes.editor', 'end'],
+        ['settle', 'hermes.message'],
+        ['del', 'hermes.message'],
+        ['suspend'], ['resume'],
+      ] } },
+      ack,
+    )
+    dsh.persist()
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(0)
+  })
+
+  it('rejects malformed focus and other non-SDK operations rather than swallowing them', () => {
+    const root = workspace()
+    const dsh = captured(root, 'dsh')
+    const peer = captured(root, 'hermes')
+    const ops = body(peer.events[4]!)['ops'] as unknown[][]
+    for (const invalid of [
+      ['focus'], ['focus', ''], ['focus', 99], ['focus', false],
+      ['focus', {}], ['focus', null, 'extra'],
+      ['set', 'hermes.message'], ['set', 'hermes.message', null],
+      ['splice', 'hermes.message', -1, 0, '!'],
+      ['move', 'hermes.editor', 'main', 17],
+      ['scroll', 'hermes.editor', null],
+      ['suspend', 'extra'], ['resume', null],
+      ['props', 'hermes.message', { text: 'not an SDK opcode' }],
+      ['future-unknown', 'hermes.editor'],
+    ]) {
+      ops.push(invalid)
+      peer.persist()
+      const result = diff(dsh, peer)
+      expect(result.status, JSON.stringify(invalid) + ': ' + result.stderr).toBe(2)
+      ops.pop()
+    }
+    body(peer.events[1]!)['credits'] = 3 // bounded startup oracle is credits <=2
+    peer.persist()
+    expect(diff(dsh, peer).status).toBe(2)
+  })
+
   it('rejects unsupported q versions/features and malformed r replies', () => {
     const root = workspace()
     const dsh = captured(root, 'dsh')
@@ -433,6 +504,44 @@ describe('RFC #6 synthetic evidence seal safety (NOT native proof)', () => {
     expect(result.status).toBe(2)
     expect(existsSync(join(e.root, 'escaped.tar.gz'))).toBe(false)
     expect(seal(e).status, 'safe destination must remain retryable').toBe(0)
+  })
+
+  it('distinguishes scenario double-quoting from POSIX shell quoting at actual ctl sites (UNIT only)', () => {
+    const source = readFileSync(join(harness, 'private_tern.sh'), 'utf8')
+    const begin = source.indexOf('\nscenario_quote() {')
+    const end = source.indexOf('\nctl() {', begin + 1)
+    expect(begin).toBeGreaterThan(0)
+    expect(end).toBeGreaterThan(begin)
+    const functions = source.slice(begin, end)
+    expect(source).toContain('ctl replay-start surface-play "$(scenario_quote "$BASE/log/replay-source.jsonl")"')
+    expect(source).toContain('ctl app-launch run "$(run_quote "$BASE/launch-dsh.sh")"')
+    expect(source).toContain('ctl log-pane-run run "$(run_quote "$BASE/log-pane.sh")"')
+    for (const filename of [
+      '/tmp/path with spaces/replay witness.jsonl',
+      '/tmp/quote "double" and ' + "'single'" + '/file.jsonl',
+      '/tmp/back\\slash/$(false) $HOME/replay.jsonl',
+    ]) {
+      // Execute only the extracted production encoding helpers. No Tern, Sway,
+      // DSH, provider, user command or arbitrary fragment is launched.
+      const encoded = spawnSync('bash', ['-c',
+        functions + '\nscenario_quote "$1"\nrun_quote "$1"', 'unit-quote', filename,
+      ], { encoding: 'utf8', timeout: 10_000 })
+      expect(encoded.error, String(encoded.error)).toBeUndefined()
+      expect(encoded.status, encoded.stderr).toBe(0)
+      const lines = encoded.stdout.trimEnd().split('\n')
+      expect(lines).toHaveLength(2)
+      expect(lines[0]).toMatch(/^"/) // Tern scenario strings, not shell single quotes
+      expect(lines[1]).toMatch(/^"/)
+      expect(JSON.parse(lines[0]!)).toBe(filename) // surface-play file argument
+      const shellWord = JSON.parse(lines[1]!) as string
+      // Only a trusted synthetic filename is evaluated by the POSIX test shell.
+      const roundTrip = spawnSync('sh', ['-c', 'printf %s ' + shellWord], {
+        encoding: 'utf8', timeout: 10_000,
+      })
+      expect(roundTrip.error, String(roundTrip.error)).toBeUndefined()
+      expect(roundTrip.status, roundTrip.stderr).toBe(0)
+      expect(roundTrip.stdout).toBe(filename) // run strips scenario, THEN shell parses
+    }
   })
 
   it('keeps private launcher shell parseable without executing Sway or a provider', () => {
