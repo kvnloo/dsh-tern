@@ -75,7 +75,7 @@ describe('negotiated native question/approval hit surfaces', () => {
     const choice = layer.find(item => item.kind === 'el' && item.props.text === '2) Deny')!
     expect(f.focus.at(-1)).toBe('layer.' + overlay.props.key + '.answer')
     expect(choice.handlers?.onClick).toBeTypeOf('function')
-    choice.handlers!.onClick()
+    choice.handlers!.onClick!()
     expect(await pending).toBe('deny')
     expect(f.latest().layer).toHaveLength(0)
     await f.terminal.closed()
@@ -94,7 +94,7 @@ describe('negotiated native question/approval hit surfaces', () => {
     expect(f.focus.at(-1)).toBe('dock.' + root.props.key + '.answer')
     expect(f.region('dock').find(item => item.kind === 'editor' && item.props.sendable === false)).toBeDefined()
     const button = f.region('dock').find(item => item.kind === 'el' && item.props.text === '1) Alpha')!
-    button.handlers!.onClick()
+    button.handlers!.onClick!()
     expect(await pending).toBe('alpha')
     expect(f.region('dock').some(item => item.props.role === 'dsh.question')).toBe(false)
     await f.terminal.closed()
@@ -109,7 +109,7 @@ describe('negotiated native question/approval hit surfaces', () => {
     expect(f.latest().layer).toEqual([])
     expect(f.focus.every(id => id === null)).toBe(true)
     const choice = f.region('dock').find(item => item.props.role === 'dsh.question.choice')!
-    choice.handlers!.onClick()
+    choice.handlers!.onClick!()
     expect(await pending).toBe('no')
     await f.terminal.closed()
   })
@@ -119,7 +119,7 @@ describe('negotiated native question/approval hit surfaces', () => {
     f.terminal.update(base)
     const req = { id: 'same:logical-id', title: 'Again?', choices: [{ label: 'Yes', value: 'yes' }] }
     const first = f.terminal.ask(req)
-    const stale = f.region('layer').find(item => item.kind === 'el')!.handlers!.onClick
+    const stale = f.region('layer').find(item => item.kind === 'el')!.handlers!.onClick!
     const firstKey = f.region('layer').find(item => item.kind === 'overlay')!.props.key
     stale()
     expect(await first).toBe('yes')
@@ -128,7 +128,7 @@ describe('negotiated native question/approval hit surfaces', () => {
     expect(secondKey).not.toEqual(firstKey)
     stale()
     expect(f.region('layer').some(item => item.kind === 'overlay')).toBe(true)
-    f.region('layer').find(item => item.kind === 'el')!.handlers!.onClick()
+    f.region('layer').find(item => item.kind === 'el')!.handlers!.onClick!()
     expect(await second).toBe('yes')
     await f.terminal.closed()
   })
