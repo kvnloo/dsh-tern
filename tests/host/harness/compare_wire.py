@@ -50,7 +50,7 @@ def file_sha256(path: Path) -> str:
 def tern_semver(value: Any, origin: str) -> str:
     """Normalize the CLI's 'Tern 0.9.5' versus SDK r.ver '0.9.5'."""
     require(nonempty(value), f"{origin}: Tern version missing")
-    match = re.fullmatch(r"(?i)(?:tern\\s+)?v?(\\d+\\.\\d+\\.\\d+(?:[-+][0-9a-z.-]+)?)",
+    match = re.fullmatch(r"(?i)(?:tern\s+)?v?(\d+\.\d+\.\d+(?:[-+][0-9a-z.-]+)?)",
                          value.strip())
     require(match is not None, f"{origin}: unrecognized Tern version format")
     return match.group(1)
