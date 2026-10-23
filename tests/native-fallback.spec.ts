@@ -62,7 +62,7 @@ describe('native capability fallback and input isolation', () => {
   })
 
   it('rejects queued previous-question handler callbacks by request instance', async () => {
-    const f = fixture(['card', 'text', 'el', 'input', 'row', 'col'])
+    const f = fixture(['overlay', 'card', 'text', 'el', 'input', 'row', 'col'])
     f.term.update(snapshot)
     const old = f.term.ask({ id: 'test.first', title: 'First?', choices: [{ label: 'No', value: 'no' }] })
     const first = f.latest().layer.flatMap(flatten).find(item => item.kind === 'el')
