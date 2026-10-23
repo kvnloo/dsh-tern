@@ -431,7 +431,7 @@ async function nativeErrorRecovery(sandbox) {
     await failed.waitForExit(25_000)
     requireGate(Number.isInteger(failed.exit.code) && failed.exit.code !== 0,
       'real ConPTY protocol failure must exit nonzero')
-    requireGate(failed.output.includes('\\x1b[?2004l'.replace('\\', '\\')),
+    requireGate(failed.output.includes('\x1b[?2004l'),
       'failure did not restore bracketed paste')
     crashExit = failed.exit.code
   } finally { failed.dispose() }
@@ -440,7 +440,7 @@ async function nativeErrorRecovery(sandbox) {
   try {
     await waitNative(recovered)
     const before = recovered.frames.length
-    recovered.write('new-child-after-error\\r'.replace('\\r', '\r'))
+    recovered.write('new-child-after-error\r')
     await waitNode(recovered, { contains: 'echo: new-child-after-error' },
       'reopened child after native SDK failure', before)
     await finishNative(recovered)
