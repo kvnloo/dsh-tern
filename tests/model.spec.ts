@@ -151,7 +151,8 @@ describe('single durable projection', () => {
       data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } },
     })
     expect(transcript.snapshot().entries).toEqual([
-      { id: 'tool.orphan-call', kind: 'error', text: 'Interrupted bash' },
+      { id: 'tool.orphan-call', kind: 'error', text: 'Interrupted bash',
+        tool: { name: 'bash', status: 'cancelled' } },
     ])
   })
 
