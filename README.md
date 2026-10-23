@@ -59,7 +59,7 @@ cursor and draft.
   src/record.ts own decision routing, resource teardown and opt-in metadata
   capture independently of model execution.
 
-References: Tern by Stencil Labs; the public Hermes for Tern frontend at
+References: Tern / OMP by Can Bölük (Stencil Labs), with public SDK\n`@stencil-hq/tern` 0.1.0; the public Hermes for Tern frontend at
 https://github.com/kvnloo/hermes-tern ; the earlier Hermes TSP PR at
 https://github.com/kvnloo/hermes-agent/pull/431 .
 
