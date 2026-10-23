@@ -210,8 +210,9 @@ describe('durable semantic tool presentation', () => {
     expect(t.snapshot().entries.slice(2).map(row => row.text)).toEqual([
       ' \t ', 'Interrupted response\n',
     ])
-    const durable = { seq: history.length, eventAt: (seq: SessionSeq) => history[seq] }
-      as Parameters<Transcript['replay']>[0]
+    const durable = {
+      seq: history.length, eventAt: (seq: SessionSeq) => history[seq],
+    } as Parameters<Transcript['replay']>[0]
     const resumed = new Transcript('exceptional')
     resumed.replay(durable)
     expect(resumed.snapshot().entries).toEqual(t.snapshot().entries)
