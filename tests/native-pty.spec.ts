@@ -50,6 +50,37 @@ class Output implements TermOutput {
     }
     return value
   }
+
+  actionId(label: string): string | undefined {
+    const visit = (value: unknown): string | undefined => {
+      if (value === null || typeof value !== 'object') return
+      const candidate = value as Record<string, unknown>
+      const props = candidate['p']
+      if (typeof candidate['id'] === 'string'
+        && props !== null && typeof props === 'object'
+        && 'text' in props && props.text === label) return candidate['id']
+      const children = candidate['c']
+      if (Array.isArray(children)) {
+        for (const child of children) {
+          const found = visit(child)
+          if (found) return found
+        }
+      }
+      return
+    }
+    const frames = this.frames()
+    for (let index = frames.length - 1; index >= 0; index--) {
+      const ops = frames[index]!['ops']
+      if (!Array.isArray(ops)) continue
+      for (let offset = ops.length - 1; offset >= 0; offset--) {
+        const op = ops[offset]
+        if (!Array.isArray(op) || op[0] !== 'add') continue
+        const found = visit(op[4])
+        if (found) return found
+      }
+    }
+    return
+  }
 }
 
 const hello = {
@@ -216,6 +247,41 @@ describe('native TUI real 0.1.0 SDK / PTY / composer', () => {
       expect(frames.flatMap(item => item['ops'] as unknown[] ?? []))
         .toEqual(expect.arrayContaining([['suspend'], ['resume']]))
       expect(frames.map(item => item['s'])).toEqual(frames.map((_, index) => index + 1))
+    } finally {
+      await f.close()
+    }
+  })
+
+  it('ignores an old visible approval action after a replacement is rendered', async () => {
+    const f = await fixture(['col', 'row', 'text', 'card', 'md', 'editor', 'input'])
+    const controller = new AbortController()
+    try {
+      const old = f.terminal.ask({
+        title: 'First approval', signal: controller.signal,
+        choices: [{ label: 'Allow first', value: 'first' }],
+      })
+      const oldId = f.output.actionId('1) Allow first')
+      if (!oldId) throw new Error('First approval action missing from emitted document')
+      controller.abort()
+      expect(await old).toBeNull()
+
+      const fresh = f.terminal.ask({
+        title: 'Replacement approval',
+        choices: [{ label: 'Allow second', value: 'second' }],
+      })
+      const freshId = f.output.actionId('1) Allow second')
+      if (!freshId) throw new Error('Replacement approval action missing from emitted document')
+      let answered = false
+      void fresh.then(() => { answered = true })
+
+      f.event({ ev: 'action', sf: 'dsh', id: oldId, act: 'click' })
+      const drained = Promise.withResolvers<void>()
+      setImmediate(drained.resolve)
+      await drained.promise
+      expect(answered).toBe(false)
+
+      f.event({ ev: 'action', sf: 'dsh', id: freshId, act: 'click' })
+      expect(await fresh).toBe('second')
     } finally {
       await f.close()
     }
