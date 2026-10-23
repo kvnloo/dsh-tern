@@ -46,7 +46,7 @@ $expectedPlugin = '<the exact Draft PR head SHA>'
 Set-Location $plugin
 if ((git rev-parse HEAD).Trim() -ne $expectedPlugin) { throw 'wrong plugin head' }
 if ((git -C $host rev-parse HEAD).Trim() -ne '5badb15009ae1756c3afe0ae0cef1faafc290ccc') { throw 'wrong host head' }
-if ((git -C $host status --porcelain --untracked-files=no).Trim()) { throw 'modified host' }
+if (@(git -C $host status --porcelain --untracked-files=no).Count -gt 0) { throw 'modified host' }
 if ((node --version) -ne 'v24.11.0') { throw 'wrong Node' }
 if ((pnpm --version) -ne '11.7.0') { throw 'wrong pnpm' }
 
