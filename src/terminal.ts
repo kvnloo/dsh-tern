@@ -13,7 +13,7 @@ export interface Ask {
   readonly signal?: AbortSignal
 }
 export interface Terminal {
-  start(submit: (text: string) => void, interrupt: () => void, quit: () => void): Promise<void>
+  start(submit: (text: string) => void, interrupt: () => void, quit: (error?: Error) => void): Promise<void>
   update(snapshot: Snapshot): void
   ask(request: Ask): Promise<string | null>
   closed(): Promise<void>
