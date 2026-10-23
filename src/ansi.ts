@@ -15,6 +15,11 @@ export interface AnsiStreams {
 }
 
 function lineOf(entry: Entry): string {
+  if (entry.tool) {
+    // The shared durable projection owns these facts; ANSI has no tool state.
+    return '[tool ' + safeText(entry.tool.name) + ' · ' + entry.tool.status + '] '
+      + safeText(entry.text) + '\n'
+  }
   const role = entry.kind === 'user' ? 'you'
     : entry.kind === 'assistant' ? 'dsh'
       : entry.kind === 'error' ? 'error'
