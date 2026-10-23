@@ -108,13 +108,13 @@ describe('native-profile RED behavioral witnesses against the real SDK decoder',
     history.accept(event(0, 'tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'bash', arguments: '{}' }))
     expect(history.snapshot().entries).toHaveLength(1)
     history.accept(event(1, 'tool/result', { turn: 1, step: 1, message: {
-      callId: 'call-1', isError: false, content: [{ type: 'text', text: 'ok' }],
+      toolCallId: 'call-1', isError: false, content: [{ type: 'text', text: 'ok' }],
     } }))
     expect(history.snapshot().entries).toHaveLength(1)
     expect(history.snapshot().entries[0]).toMatchObject({ id: 'tool.call-1', text: 'Tool result: ok' })
     history.accept(event(2, 'tool/call', { turn: 1, step: 2, callId: 'call-2', name: 'other', arguments: '{}' }))
     history.accept(event(3, 'tool/result', { turn: 1, step: 2, message: {
-      callId: 'call-2', isError: true, content: [{ type: 'text', text: 'failed' }],
+      toolCallId: 'call-2', isError: true, content: [{ type: 'text', text: 'failed' }],
     } }))
     expect(history.snapshot().entries.at(-1)).toMatchObject({ id: 'tool.call-2', kind: 'error' })
   })
