@@ -215,8 +215,9 @@ def surface(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
                 tag = op[0]
                 if tag == "add":
                     require(len(op) == 5 and nonempty(op[1]) and nonempty(op[2]) and
-                            (op[3] is None or nonempty(op[3])),
-                            f"{name}: malformed add region/parent/anchor")
+                            (op[3] is None or nonempty(op[3])) and
+                            isinstance(op[4], dict) and op[4].get("id") == op[1],
+                            f"{name}: malformed add id/parent/anchor/wire node")
                     recursive_ids(op[4], state["ids"], name)
                 elif tag == "text":
                     require(len(op) == 4 and nonempty(op[1]) and
@@ -243,9 +244,14 @@ def surface(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
                     # ["focus",null] is a supported unfocus, not a bad ID.
                     require(len(op) == 2 and (op[1] is None or nonempty(op[1])),
                             f"{name}: malformed focus target (string or null)")
-                elif tag in ("reveal", "scroll"):
-                    require(len(op) == 3 and nonempty(op[1]) and nonempty(op[2]),
-                            f"{name}: malformed {tag} id/position")
+                elif tag == "reveal":
+                    require(len(op) == 3 and nonempty(op[1]) and
+                            op[2] in ("start", "center", "end", "nearest"),
+                            f"{name}: malformed reveal target/alignment")
+                elif tag == "scroll":
+                    require(len(op) == 3 and nonempty(op[1]) and
+                            op[2] in ("start", "end"),
+                            f"{name}: malformed scroll target/direction")
                 elif tag in ("suspend", "resume"):
                     require(len(op) == 1, f"{name}: malformed {tag} operation")
                 else:
