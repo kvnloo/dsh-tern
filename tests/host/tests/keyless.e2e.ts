@@ -276,6 +276,54 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 keyless shipped CLI throug
     }
   }, 100_000)
 
+  it('fences split post-prompt TSP replies and invalid frames in the real ANSI Session user event', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-tui-late-ansi-'))
+    await chmod(dir, 0o700)
+    const hello = {
+      r: 'hello', v: 1, term: 'tern', ver: '0.1.0',
+      kinds: ['text', 'row', 'col', 'editor'], features: ['edit', 'send'],
+      apc: 4096, credits: 2, cols: 80, cell: { w: 8, h: 16 },
+      dark: true, reduceMotion: false,
+    }
+    const json = JSON.stringify(hello)
+    const intended = 'preé-mid🌱post'
+    try {
+      const result = await execute(dir, 'ansi-late-frames', 'late-hello', [
+        // The banner alone is not input readiness; wait for readline's real prompt.
+        { wait: 'dsh> ' },
+        { write: 'pre' },
+        { hex: 'c3' }, { hex: 'a9' },
+        // Split an APC reply after the fallback is already selected, including
+        // a pause inside its JSON. Neither the frame nor its JSON is user text.
+        { hex: '1b5f7473703b723b' },
+        { write: json.slice(0, 20) },
+        { sleep_ms: 65 },
+        { write: json.slice(20) + '\x1b\\' },
+        { write: '-mid' },
+        { write: '\x1b_tsp;r;' + JSON.stringify({ ...hello, v: 99 }) + '\x1b\\' },
+        { write: '\x1b_tsp;e;{broken-json}\x1b\\' },
+        { write: '\x1b_tsp;r;{"r":"hello","v":1,"term":"foreign"}\x1b\\' },
+        // OSC 877 is the same SDK-maintained input seam, also split.
+        { hex: '1b5d3837373b7473703b723b' },
+        { write: json.slice(0, 9) },
+        { write: json.slice(9) + '\x1b\\' },
+        // A plain Escape must remain a key; a split UTF-8 scalar must survive.
+        { hex: '1b' }, { sleep_ms: 85 },
+        { hex: 'f09f' }, { hex: '8cb1' },
+        { write: 'post\r' },
+        { wait: '[dsh] echo: ' + intended },
+        { write: '/quit\r' },
+      ])
+      expect(result.exit_code, result.output).toBe(0)
+      const saved = await durable(dir)
+      expect(users(saved)).toEqual([intended])
+      expect(assistants(saved)).toEqual(['echo: ' + intended])
+      expect(saved.events.filter(event => event.type === 'user/message')).toHaveLength(1)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   it('handles ANSI Ctrl-D EOF and native SIGTERM without leaving the terminal held', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'dsh-tui-terminal-end-'))
     await chmod(dir, 0o700)
