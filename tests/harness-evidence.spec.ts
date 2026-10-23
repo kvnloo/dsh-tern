@@ -318,6 +318,9 @@ describe('RFC #6 synthetic evidence seal safety (NOT native proof)', () => {
     e.capture.wire_file = 'log/replay-source.jsonl'
     write(join(e.root, 'log/replay-source.jsonl'), wire(startup('dsh')))
     e.update()
+    rmSync(join(e.root, 'log/dsh-sdk-wire.jsonl'))
+    rmSync(join(e.root, 'log/metadata.jsonl'))
+    rmSync(join(e.root, 'sessions'), { recursive: true })
     expect(seal(e).status).toBe(0)
     const replay = inspectArchive(e.archive)
     expect(replay.manifest['source_kind']).toBe('surface-replay')
@@ -331,6 +334,8 @@ describe('RFC #6 synthetic evidence seal safety (NOT native proof)', () => {
     remote.capture.workspace_start = { empty: false, prior_events: null }
     remote.update()
     rmSync(join(remote.root, 'log/dsh-sdk-wire.jsonl'))
+    rmSync(join(remote.root, 'log/metadata.jsonl'))
+    rmSync(join(remote.root, 'sessions'), { recursive: true })
     expect(seal(remote).status).toBe(0)
     expect(inspectArchive(remote.archive).manifest['source_kind']).toBe('remote-uncollected')
   })

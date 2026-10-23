@@ -47,7 +47,9 @@ REQUIRED = (
 CONTROL = {
     "control/mode", "control/private-wayland-display", "control/quit.json",
     "control/foreground-shell.json", "control/sway-info.json", "control/exit.json",
-    "control/commands.json",
+    "control/commands.json", "control/pre-run-state.json",
+    "control/shells-before.json", "control/shells-after.json",
+    "control/shells-before-run.json",
 }
 LOGS = {
     "log/sway.log", "log/tern-serve.log", "log/tern-ctl.err",
@@ -201,14 +203,22 @@ def manifest(root: Path, chosen: dict[str, Path], stage: Path,
     if mode == "replay":
         require(wire_name == "log/replay-source.jsonl" and wire_name in chosen,
                 "replay requires privately captured replay-source.jsonl")
+        require("log/dsh-sdk-wire.jsonl" not in chosen and
+                "log/metadata.jsonl" not in chosen and
+                not any(p.startswith("sessions/") for p in chosen),
+                "REPLAY ONLY archive must not contain live DSH SDK/Session records")
     elif build["location"] == "local":
+        require("log/replay-source.jsonl" not in chosen,
+                "live evidence must not bundle replay-source.jsonl")
         require(wire_name == "log/dsh-sdk-wire.jsonl" and
                 wire_name in chosen and "log/metadata.jsonl" in chosen,
                 "local live evidence requires SDK wire and metadata recorder")
     else:
         require(wire_name is None and
-                "log/dsh-sdk-wire.jsonl" not in chosen,
-                "uncopied remote DSH logs must not be labelled local captures")
+                "log/dsh-sdk-wire.jsonl" not in chosen and
+                "log/metadata.jsonl" not in chosen and
+                not any(p.startswith("sessions/") for p in chosen),
+                "uncopied remote DSH SDK/Session logs must not be labelled local captures")
     if mode == "live" and scope == "live-functional" and build["location"] == "local":
         require(any(path.startswith("sessions/") for path in chosen),
                 "functional local run requires actual persisted Session JSONL")
@@ -268,6 +278,19 @@ def seal(root: Path, out: Path, include_fixtures: bool) -> dict[str, Any]:
                 tar.add(redacted, arcname="redacted-wire.jsonl", recursive=False)
             tar.add(marker, arcname="manifest.json", recursive=False)
         archive.chmod(0o600)
+        # A session can append while the archiver runs. Verify the bytes
+        # INSIDE the completed tar against the manifest before publication.
+        with tarfile.open(archive, "r:gz") as sealed:
+            for entry in result["files"]:
+                member = sealed.getmember(entry["path"])
+                stream = sealed.extractfile(member)
+                require(stream is not None and member.size == entry["bytes"],
+                        "archive member size mismatch: " + entry["path"])
+                verify = hashlib.sha256()
+                for packet in iter(lambda: stream.read(1024 * 1024), b""):
+                    verify.update(packet)
+                require(verify.hexdigest() == entry["sha256"],
+                        "evidence changed during seal: " + entry["path"])
         # Hardlink publication is atomic and fails if the destination exists;
         # unlike rename/replace it cannot overwrite another worker's archive.
         os.link(archive, out, follow_symlinks=False)
