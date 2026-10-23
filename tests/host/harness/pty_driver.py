@@ -114,23 +114,78 @@ class Driver:
         else:
             self.send(DA1)
 
-    def collect_actions(self, document: object) -> None:
-        """Discover actual negotiated el(tag:button) IDs in emitted TSP docs."""
-        if not isinstance(document, dict):
+    def forget_node(self, ident: str) -> None:
+        """Remove a replaced or deleted document subtree, including its controls."""
+        for child in list(self.nodes):
+            if child == ident or child.startswith(ident + "."):
+                del self.nodes[child]
+
+    def active_question(self) -> str | None:
+        """Find the *current* question by semantic role, not region or nonce."""
+        roots = [
+            ident for ident, node in self.nodes.items()
+            if ident.startswith(("layer.request.", "dock.request."))
+            and node["p"].get("role") == "dsh.question"
+        ]
+        if roots:
+            # Multiple live questions are ambiguous. Never route a stale click.
+            return roots[0] if len(roots) == 1 else None
+
+        # A negotiated leaf-only dock has no enclosing card/overlay. Its
+        # semantic choices and request-scoped editor still identify the opening.
+        scopes: set[str] = set()
+        for ident, node in self.nodes.items():
+            if not ident.startswith("dock.request."):
+                continue
+            if node["p"].get("role") == "dsh.question.choice":
+                scope, separator, index = ident.rpartition(".choice.")
+                if separator and index.isdecimal():
+                    scopes.add(scope)
+            elif node["k"] in ("editor", "input") and ident.endswith(".answer"):
+                scopes.add(ident[:-len(".answer")])
+        return next(iter(scopes)) if len(scopes) == 1 else None
+
+    def refresh_actions(self) -> None:
+        """Index only controls in the active emitted question document.
+
+        Rebuild after every frame: historical 'add' documents must never keep
+        removed buttons/editors eligible for action.click or native send.
+        """
+        self.actions.clear()
+        self.answer_id = None
+        root = self.active_question()
+        if root is None:
             return
-        props = document.get("p")
-        if document.get("k") == "el" and isinstance(props, dict) and props.get("tag") == "button":
-            label, ident = props.get("text"), document.get("id")
-            if isinstance(label, str) and isinstance(ident, str) and ident.startswith("layer."):
+        editors: list[str] = []
+        for ident, node in self.nodes.items():
+            if not ident.startswith(root + "."):
+                continue
+            props = node["p"]
+            kind = node["k"]
+            if kind in ("editor", "input"):
+                editors.append(ident)
+            if props.get("role") != "dsh.question.choice":
+                continue
+            # The SDK negotiates el(button), or actionable row/text/rows
+            # fallbacks. A lookalike composer/navigation button is not a choice.
+            if kind == "el":
+                if props.get("tag") != "button":
+                    continue
+            elif kind not in ("row", "text", "rows"):
+                continue
+            label = props.get("text")
+            if not isinstance(label, str):
+                lines = props.get("lines")
+                if isinstance(lines, list) and lines and isinstance(lines[0], str):
+                    label = lines[0]
+                else:
+                    child = self.nodes.get(ident + ".label", {})
+                    label = child.get("p", {}).get("text")
+            if isinstance(label, str):
                 self.actions[label] = ident
-        if document.get("k") in ("editor", "input"):
-            ident = document.get("id")
-            if isinstance(ident, str) and ident.startswith("layer."):
-                self.answer_id = ident
-        children = document.get("c")
-        if isinstance(children, list):
-            for child in children:
-                self.collect_actions(child)
+        # Never guess which editor owns a response if the document is ambiguous.
+        if len(editors) == 1:
+            self.answer_id = editors[0]
 
     def reassemble(self, verb: bytes, body: bytes) -> bytes | None:
         """Respect TSP c/m chunk headers; keep arbitrary payload bytes intact."""
@@ -190,13 +245,17 @@ class Driver:
             if not isinstance(op, list) or not op:
                 continue
             if op[0] == "add" and len(op) >= 5:
-                self.remember_node(op[4], index)
-                self.collect_actions(op[4])
+                document = op[4]
+                if isinstance(document, dict) and isinstance(document.get("id"), str):
+                    self.forget_node(document["id"])
+                self.remember_node(document, index)
             elif op[0] == "text" and len(op) >= 4 and isinstance(op[1], str):
                 ident = op[1]
                 if not isinstance(op[3], str):
                     continue
-                node = self.nodes.setdefault(ident, {"k": "text", "p": {}})
+                node = self.nodes.get(ident)
+                if node is None:
+                    continue
                 old = node["p"].get("text", "")
                 node["p"]["text"] = old + op[3] if op[2] == "append" else op[3]
                 self.note_node(ident, index)
@@ -211,10 +270,8 @@ class Driver:
                     node["p"][op[2]] = op[3]
                 self.note_node(ident, index)
             elif op[0] == "del" and len(op) >= 2 and isinstance(op[1], str):
-                ident = op[1]
-                for child in list(self.nodes):
-                    if child == ident or child.startswith(ident + "."):
-                        del self.nodes[child]
+                self.forget_node(op[1])
+        self.refresh_actions()
 
     def scan(self) -> None:
         # An APC can span PTY reads; a single complete TSP frame can in turn
