@@ -283,6 +283,9 @@ content and replay, never inferred model/tool output.
 ~~~sh
 git rev-parse HEAD
 corepack pnpm install --frozen-lockfile --prefer-offline
+# Heavy MBP build gate: acquire fleet flock, finish build, RELEASE lock.
+corepack pnpm run build:lib:host
+# Every native/PTY/real-Tern smoke below runs AFTER the lock is released.
 corepack pnpm exec vitest run \
   packages/bundle/tui-app/tests/native-semantics.spec.ts \
   packages/bundle/tui-app/tests/native.spec.ts \
