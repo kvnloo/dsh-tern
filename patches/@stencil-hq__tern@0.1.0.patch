@@ -9,6 +9,6 @@ diff --git a/src/wire.ts b/src/wire.ts
 --- a/src/wire.ts
 +++ b/src/wire.ts
 @@ -777,2 +777,3 @@
-      case 'hello':
+       case 'hello':
 +         if (num(raw, 'v') !== PROTOCOL_VERSION) return { r: 'unknown', raw };
           return {
