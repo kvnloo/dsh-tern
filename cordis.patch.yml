@@ -1,0 +1,24 @@
+# Interactive TUI over dsh-base. The renderer owns presentation; Agent and
+# Session remain the public durable model. Never mount HTTP or browser rows.
+- id: system-prompt
+  config:
+    personaSuffix: Your working directory is {{cwd}}.
+    personaPrefix: >-
+      You are a coding agent powered by the {{model}} model.
+
+- id: tools
+  config:
+    mode: !!js process.env.DSH_TOOLS_MODE
+
+- insert:
+    - id: tui-startup
+      name: '@deepseek-ai/dsh-tui-app/startup'
+    - id: tui-app
+      name: '@deepseek-ai/dsh-tui-app'
+      inject: [tuiStartup]
+      config:
+        sessionId: !!js ctx.tuiStartup.sessionId
+        native: !!js ctx.tuiStartup.native
+
+- id: hmr
+  disabled: true
