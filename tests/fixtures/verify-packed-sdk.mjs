@@ -19,6 +19,7 @@ const unpack = (tarball, folder) => {
   run('tar', ['-xzf', tarball, '-C', folder])
   return join(folder, 'package')
 }
+const boundedCloseGuard = /if\s*\(\s*!this\.blocked\s*\)\s*this\.#flush\s*\(\s*\)/
 try {
   const localDir = join(temp, 'local')
   const registryDir = join(temp, 'registry')
@@ -29,11 +30,15 @@ try {
   assert.equal(localArchives.length, 1, 'one packed tui-app tarball')
   const packed = unpack(join(localDir, localArchives[0]), join(temp, 'packed'))
   const lib = readFileSync(join(packed, 'lib/index.js'), 'utf8')
+  assert.equal(lib, readFileSync(join(root, 'lib/index.js'), 'utf8'),
+    'packed production library must be byte-identical to the built native runtime')
   const config = JSON.parse(readFileSync(join(packed, 'package.json'), 'utf8'))
   assert.equal(config.dependencies['@stencil-hq/tern'], '0.1.0')
   assert.doesNotMatch(lib, /(?:from\s*|import\s*\()\s*['"]@stencil-hq\/tern(?:['"/]|$)/)
   assert.match(lib, /\bforget\s*\(\s*ids\s*\)\s*\{/, 'Surface.forget method body must be bundled')
   assert.match(lib, /\bonAck\s*\(\s*listener\s*\)\s*\{/, 'Surface.onAck method body must be bundled')
+  assert.match(lib, boundedCloseGuard,
+    'credit-bounded close must survive in the packed SDK, not only workspace tests')
 
   const supplied = process.env.REGISTRY_TERN_TARBALL
   if (!supplied) {
@@ -47,6 +52,8 @@ try {
   const sdk = readFileSync(join(raw, 'dist/surface.js'), 'utf8')
   assert.doesNotMatch(sdk, /\bforget\s*\(/, 'negative control must be unpatched 0.1.0')
   assert.doesNotMatch(sdk, /\bonAck\s*\(/, 'negative control must be unpatched 0.1.0')
+  assert.doesNotMatch(sdk, boundedCloseGuard,
+    'unpatched registry SDK must retain the observed over-credit close negative control')
   const wire = readFileSync(join(raw, 'dist/wire.js'), 'utf8')
   assert.doesNotMatch(wire, /num\(raw,\s*['"]v['"]\)\s*!==\s*PROTOCOL_VERSION/,
     'negative control must lack the workspace hello guard')
