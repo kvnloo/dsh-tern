@@ -58,6 +58,7 @@ export class Transcript {
     const length = session.seq
     for (let seq = 0; seq < length; seq++) {
       // Existing Session history read; the store is the durable authority.
+      // oxlint-disable-next-line typescript/no-deprecated -- Durable Session replay API pending projection migration.
       const event = session.eventAt(SessionSeq(seq))
       if (!event) throw new Error('TUI transcript missing Session event ' + seq)
       this.accept(event)
