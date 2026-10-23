@@ -19,37 +19,108 @@ diff --git a/src/surface.ts b/src/surface.ts
 -import { View, type Renderable } from './reconcile.js';
 +import { View, type Renderable, type Tree } from './reconcile.js';
 +import { Node } from './nodes.js';
-@@ -84,1 +85,2 @@
+@@ -9,1 +10,2 @@
+    Op,
++   WireNode,
+@@ -84,1 +86,2 @@
 +   #ackListeners = new Set<(sequence: number) => void>();
     #queue: Op[] = [];
-@@ -129,1 +131,35 @@
+@@ -129,1 +132,103 @@
 +   /** Forget only renderer snapshots for terminal-retired ids (no wire del). */
 +   forget(ids: readonly string[]): void {
 +      if (this.#closed || ids.length === 0) return;
-+      const gone = (id: string | null | undefined): boolean =>
-+         typeof id === 'string' && ids.some(evicted => id === evicted || id.startsWith(evicted + '.'));
++      const retired = new Set(ids);
++      // Node ids are opaque: dotted keys can name unrelated siblings.
++      const collectTree = (tree: Tree, parentRetired = false): void => {
++         const removed = parentRetired || retired.has(tree.id);
++         if (removed) retired.add(tree.id);
++         for (const child of tree.children) collectTree(child, removed);
++      };
++      for (const view of [this.#sent, this.#latest, this.#pending]) {
++         if (!view) continue;
++         for (const region of view.regions) if (region) collectTree(region);
++      }
++      const collectWire = (wire: WireNode, parentRetired = false): void => {
++         const removed = parentRetired || retired.has(wire.id);
++         if (removed) retired.add(wire.id);
++         for (const child of wire.c ?? []) collectWire(child, removed);
++      };
++      // Raw adds may refer to parents introduced by other queued adds.
++      let previousSize = -1;
++      while (retired.size !== previousSize) {
++         previousSize = retired.size;
++         for (const op of this.#queue) {
++            if (op[0] === 'add') collectWire(op[4], retired.has(op[1]) || retired.has(op[2]));
++         }
++      }
++      const pruneNode = (tree: Tree): Node | undefined => {
++         if (retired.has(tree.id)) return undefined;
++         let children: Node[] | undefined;
++         for (let i = 0; i < tree.children.length; i++) {
++            const child = tree.children[i]!;
++            const next = pruneNode(child);
++            if (!children && next !== child.node) children = tree.node.children.slice(0, i);
++            if (children && next) children.push(next);
++         }
++         return children
++            ? new Node(tree.kind, tree.node.props, children, tree.node.handlers)
++            : tree.node;
++      };
 +      const prune = (view: View): View => {
-+         const copy = (tree: Tree): Node | undefined => {
-+            if (gone(tree.id)) return undefined;
-+            const children = tree.children.map(copy).filter((child): child is Node => child !== undefined);
-+            if (children.length === tree.node.children.length
-+               && children.every((child, i) => child === tree.node.children[i])) return tree.node;
-+            return new Node(tree.kind, tree.node.props, children, tree.node.handlers);
-+         };
-+         return View.from({
-+            main: view.regions[0] ? copy(view.regions[0]) : undefined,
-+            dock: view.regions[1] ? copy(view.regions[1]) : undefined,
-+            layer: view.regions[2] ? copy(view.regions[2]) : undefined,
-+         });
++         const regions = view.regions.map(region => region ? pruneNode(region) : undefined);
++         if (regions.every((node, i) => node === view.regions[i]?.node)) return view;
++         return View.from({ main: regions[0], dock: regions[1], layer: regions[2] });
 +      };
 +      this.#sent = prune(this.#sent);
 +      this.#latest = prune(this.#latest);
 +      if (this.#pending) this.#pending = prune(this.#pending);
-+      this.#queue = this.#queue.filter(op => {
-+         if (op[0] === 'add' || op[0] === 'move')
-+            return !gone(op[1]) && !gone(op[2]) && !gone(op[3]);
-+         return op.length < 2 || !gone(op[1]);
-+      });
++      const pruneWire = (wire: WireNode): WireNode | undefined => {
++         if (retired.has(wire.id)) return undefined;
++         if (!wire.c) return wire;
++         let children: WireNode[] | undefined;
++         for (let i = 0; i < wire.c.length; i++) {
++            const child = wire.c[i]!;
++            const next = pruneWire(child);
++            if (!children && next !== child) children = wire.c.slice(0, i);
++            if (children && next) children.push(next);
++         }
++         return children ? { ...wire, c: children } : wire;
++      };
++      const remaining: Op[] = [];
++      for (const op of this.#queue) {
++         switch (op[0]) {
++            case 'add': {
++               if (retired.has(op[1]) || retired.has(op[2])) break;
++               const wire = pruneWire(op[4]);
++               if (!wire) break;
++               const before = op[3] !== null && retired.has(op[3]) ? null : op[3];
++               remaining.push(wire === op[4] && before === op[3] ? op
++                  : ['add', op[1], op[2], before, wire]);
++               break;
++            }
++            case 'move': {
++               if (retired.has(op[1]) || retired.has(op[2])) break;
++               const before = op[3] !== null && retired.has(op[3]) ? null : op[3];
++               remaining.push(before === op[3] ? op : ['move', op[1], op[2], before]);
++               break;
++            }
++            case 'set':
++            case 'text':
++            case 'splice':
++            case 'del':
++            case 'settle':
++            case 'focus':
++            case 'reveal':
++            case 'scroll':
++               if (op[1] === null || !retired.has(op[1])) remaining.push(op);
++               break;
++            case 'suspend':
++            case 'resume':
++               remaining.push(op);
++               break;
++         }
++      }
++      this.#queue = remaining;
 +   }
 +
 +   /** Invoked after a real terminal ACK is applied, including credit release. */
@@ -58,7 +129,7 @@ diff --git a/src/surface.ts b/src/surface.ts
 +      return () => { this.#ackListeners.delete(listener); };
 +   }
     /** Installs (or with `null` removes) stylesheet `name`. */
-@@ -214,2 +250,3 @@
+@@ -214,2 +319,3 @@
 -      this.#acked = Math.min(s, this.#seq);
 -      this.#pump();
 +      this.#acked = Math.min(s, this.#seq);
@@ -74,33 +145,102 @@ diff --git a/dist/surface.js b/dist/surface.js
 @@ -30,1 +31,2 @@
 +    #ackListeners = new Set();
      #queue = [];
-@@ -72,1 +74,34 @@
+@@ -72,1 +74,103 @@
 +    /** Forget only renderer snapshots for terminal-retired ids (no wire del). */
 +    forget(ids) {
 +        if (this.#closed || ids.length === 0) return;
-+        const gone = (id) => typeof id === 'string' && ids.some(evicted => id === evicted || id.startsWith(evicted + '.'));
++        const retired = new Set(ids);
++        // Node ids are opaque: dotted keys can name unrelated siblings.
++        const collectTree = (tree, parentRetired = false) => {
++            const removed = parentRetired || retired.has(tree.id);
++            if (removed) retired.add(tree.id);
++            for (const child of tree.children) collectTree(child, removed);
++        };
++        for (const view of [this.#sent, this.#latest, this.#pending]) {
++            if (!view) continue;
++            for (const region of view.regions) if (region) collectTree(region);
++        }
++        const collectWire = (wire, parentRetired = false) => {
++            const removed = parentRetired || retired.has(wire.id);
++            if (removed) retired.add(wire.id);
++            for (const child of wire.c ?? []) collectWire(child, removed);
++        };
++        // Raw adds may refer to parents introduced by other queued adds.
++        let previousSize = -1;
++        while (retired.size !== previousSize) {
++            previousSize = retired.size;
++            for (const op of this.#queue) {
++                if (op[0] === 'add') collectWire(op[4], retired.has(op[1]) || retired.has(op[2]));
++            }
++        }
++        const pruneNode = (tree) => {
++            if (retired.has(tree.id)) return undefined;
++            let children;
++            for (let i = 0; i < tree.children.length; i++) {
++                const child = tree.children[i];
++                const next = pruneNode(child);
++                if (!children && next !== child.node) children = tree.node.children.slice(0, i);
++                if (children && next) children.push(next);
++            }
++            return children
++                ? new Node(tree.kind, tree.node.props, children, tree.node.handlers)
++                : tree.node;
++        };
 +        const prune = (view) => {
-+            const copy = (tree) => {
-+                if (gone(tree.id)) return undefined;
-+                const children = tree.children.map(copy).filter(child => child !== undefined);
-+                if (children.length === tree.node.children.length
-+                    && children.every((child, i) => child === tree.node.children[i])) return tree.node;
-+                return new Node(tree.kind, tree.node.props, children, tree.node.handlers);
-+            };
-+            return View.from({
-+                main: view.regions[0] ? copy(view.regions[0]) : undefined,
-+                dock: view.regions[1] ? copy(view.regions[1]) : undefined,
-+                layer: view.regions[2] ? copy(view.regions[2]) : undefined,
-+            });
++            const regions = view.regions.map(region => region ? pruneNode(region) : undefined);
++            if (regions.every((node, i) => node === view.regions[i]?.node)) return view;
++            return View.from({ main: regions[0], dock: regions[1], layer: regions[2] });
 +        };
 +        this.#sent = prune(this.#sent);
 +        this.#latest = prune(this.#latest);
 +        if (this.#pending) this.#pending = prune(this.#pending);
-+        this.#queue = this.#queue.filter(op => {
-+            if (op[0] === 'add' || op[0] === 'move')
-+                return !gone(op[1]) && !gone(op[2]) && !gone(op[3]);
-+            return op.length < 2 || !gone(op[1]);
-+        });
++        const pruneWire = (wire) => {
++            if (retired.has(wire.id)) return undefined;
++            if (!wire.c) return wire;
++            let children;
++            for (let i = 0; i < wire.c.length; i++) {
++                const child = wire.c[i];
++                const next = pruneWire(child);
++                if (!children && next !== child) children = wire.c.slice(0, i);
++                if (children && next) children.push(next);
++            }
++            return children ? { ...wire, c: children } : wire;
++        };
++        const remaining = [];
++        for (const op of this.#queue) {
++            switch (op[0]) {
++                case 'add': {
++                    if (retired.has(op[1]) || retired.has(op[2])) break;
++                    const wire = pruneWire(op[4]);
++                    if (!wire) break;
++                    const before = op[3] !== null && retired.has(op[3]) ? null : op[3];
++                    remaining.push(wire === op[4] && before === op[3] ? op
++                        : ['add', op[1], op[2], before, wire]);
++                    break;
++                }
++                case 'move': {
++                    if (retired.has(op[1]) || retired.has(op[2])) break;
++                    const before = op[3] !== null && retired.has(op[3]) ? null : op[3];
++                    remaining.push(before === op[3] ? op : ['move', op[1], op[2], before]);
++                    break;
++                }
++                case 'set':
++                case 'text':
++                case 'splice':
++                case 'del':
++                case 'settle':
++                case 'focus':
++                case 'reveal':
++                case 'scroll':
++                    if (op[1] === null || !retired.has(op[1])) remaining.push(op);
++                    break;
++                case 'suspend':
++                case 'resume':
++                    remaining.push(op);
++                    break;
++            }
++        }
++        this.#queue = remaining;
 +    }
 +
 +    /** Invoked after a real terminal ACK is applied, including credit release. */
@@ -109,7 +249,7 @@ diff --git a/dist/surface.js b/dist/surface.js
 +        return () => { this.#ackListeners.delete(listener); };
 +    }
      /** Installs (or with `null` removes) stylesheet `name`. */
-@@ -154,2 +189,3 @@
+@@ -154,2 +258,3 @@
 -        this.#acked = Math.min(s, this.#seq);
 -        this.#pump();
 +        this.#acked = Math.min(s, this.#seq);

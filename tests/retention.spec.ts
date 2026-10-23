@@ -169,6 +169,34 @@ async function connected() {
   return { input, oracle, terminal, output }
 }
 
+/** Capture the actual SDK's ACK-gated wire frames without applying them to the strict retention oracle. */
+class BufferedOutput implements TermOutput {
+  readonly isTTY = true
+  readonly columns = 80
+  readonly frames: Frame[] = []
+  readonly sheets: Record<string, unknown>[] = []
+  write(data: string | Uint8Array): void {
+    const wire = typeof data === 'string' ? data : string(data)
+    for (const match of wire.matchAll(/\x1b_tsp;([\s\S]*?)\x1b\\/g)) {
+      const part = splitMessage(bytes(match[1]!))
+      if (!part) throw new Error('invalid SDK wire message')
+      if (part.verb === 'f') this.frames.push(JSON.parse(string(part.body)) as Frame)
+      if (part.verb === 's') this.sheets.push(JSON.parse(string(part.body)) as Record<string, unknown>)
+    }
+  }
+}
+
+async function buffered() {
+  const input = new Input()
+  const output = new BufferedOutput()
+  const attempt = connect({ input, output, env: {}, exitHooks: false, timeout: 100 })
+  input.send(encodeMessage('r', JSON.stringify(hello)))
+  const session = await attempt
+  if (!session) throw new Error('expected real SDK session')
+  const surface = session.open({ id: 'dsh', mode: 'inline' })
+  return { input, output, session, surface }
+}
+
 describe('RFC #6 real-SDK settled history retention', () => {
   it('keeps an opaque prefix-sharing durable sibling when another child is gone', async () => {
     const { input, oracle, terminal } = await connected()
@@ -191,6 +219,112 @@ describe('RFC #6 real-SDK settled history retention', () => {
       expect(oracle.nodes.has('main.one')).toBe(false)
       expect(oracle.children.get('main')).toEqual(['main.one.sibling'])
     } finally { await terminal.closed() }
+  })
+
+  it('keeps opaque sibling handlers and blocked edits while forgetting only real descendants', async () => {
+    const { input, output, session, surface } = await buffered()
+    const onClick = vi.fn()
+    const entries = (value: string) => [
+      node('col', { key: 'one' }, [node('text', { key: 'body', text: 'retired' })]),
+      node('col', { key: 'one.sibling' }, [
+        node('text', { key: 'body', text: value, onClick }),
+      ]),
+    ]
+    try {
+      surface.render({ main: entries('before') })
+      expect(output.frames).toHaveLength(1)
+      surface.render({ main: entries('after') })
+      surface.forget(['main.one'])
+      const click = { ev: 'action' as const, sf: 'dsh', id: 'main.one.sibling.body', act: 'click', raw: {} }
+      await surface.dispatch(click)?.()
+      expect(onClick).toHaveBeenCalledOnce()
+      expect(surface.dispatch({ ...click, id: 'main.one.body' })).toBeUndefined()
+      input.send(reply({ ev: 'ack', sf: 'dsh', s: 1 }))
+      await vi.waitFor(() => expect(output.frames).toHaveLength(2))
+      const ops = output.frames[1]!.ops
+      expect(ops).toContainEqual(['text', 'main.one.sibling.body', 'replace', 'after'])
+      expect(ops.some(op => op[1] === 'main.one' || op[1] === 'main.one.body')).toBe(false)
+      expect(ops.some(op => ['add', 'del', 'move'].includes(String(op[0])) &&
+        op[1] === 'main.one.sibling')).toBe(false)
+    } finally { await session.close() }
+  })
+
+  it('filters queued op node references but preserves opaque sibling edits and stylesheet names', async () => {
+    const { input, output, session, surface } = await buffered()
+    try {
+      surface.render({ main: [
+        node('col', { key: 'one' }, [node('text', { key: 'child', text: 'retired' })]),
+        node('text', { key: 'one.sibling', text: 'kept' }),
+      ] })
+      expect(output.frames).toHaveLength(1)
+      surface.send([
+        ['set', 'main.one.sibling', { text: 'main.one' }],
+        ['text', 'main.one.sibling', 'replace', 'main.one'],
+        ['splice', 'main.one.sibling', 0, 0, 'main.one'],
+        ['focus', 'main.one.sibling'],
+        ['focus', null],
+        ['reveal', 'main.one.sibling', 'nearest'],
+        ['scroll', 'main.one.sibling', 'end'],
+        ['move', 'main.one.sibling', 'main', 'main.one'],
+        ['del', 'main.one'],
+        ['settle', 'main.one.child'],
+        ['set', 'main.one.child', { text: 'main.one.sibling' }],
+        ['text', 'main.one.child', 'replace', 'main.one.sibling'],
+        ['splice', 'main.one.child', 0, 0, 'main.one.sibling'],
+        ['focus', 'main.one.child'],
+        ['reveal', 'main.one.child', 'nearest'],
+        ['scroll', 'main.one.child', 'end'],
+        ['move', 'main.one.child', 'main', 'main.one.sibling'],
+        ['suspend'],
+        ['resume'],
+      ])
+      surface.stylesheet('main.one', '.example { color: red; }')
+      surface.forget(['main.one'])
+      input.send(reply({ ev: 'ack', sf: 'dsh', s: 1 }))
+      await vi.waitFor(() => expect(output.frames).toHaveLength(2))
+      expect(output.frames[1]!.ops).toEqual([
+        ['set', 'main.one.sibling', { text: 'main.one' }],
+        ['text', 'main.one.sibling', 'replace', 'main.one'],
+        ['splice', 'main.one.sibling', 0, 0, 'main.one'],
+        ['focus', 'main.one.sibling'],
+        ['focus', null],
+        ['reveal', 'main.one.sibling', 'nearest'],
+        ['scroll', 'main.one.sibling', 'end'],
+        ['move', 'main.one.sibling', 'main', null],
+        ['suspend'],
+        ['resume'],
+      ])
+      expect(output.sheets).toContainEqual({ sf: 'dsh', name: 'main.one', css: '.example { color: red; }' })
+    } finally { await session.close() }
+  })
+
+  it('prunes actual nested wire descendants from blocked adds without treating dotted siblings as children', async () => {
+    const { input, output, session, surface } = await buffered()
+    const sibling = { id: 'main.group.one.sibling', k: 'text', p: { text: 'stay' } }
+    const nested = { id: 'main.group.one.leaf', k: 'text', p: { text: 'retired' } }
+    const trailing = { id: 'main.trailing', k: 'text', p: { text: 'keep' } }
+    try {
+      surface.render({ main: [] })
+      expect(output.frames).toHaveLength(1)
+      surface.send([
+        ['add', 'main.group', 'main', null, { id: 'main.group', k: 'col', c: [
+          { id: 'main.group.one', k: 'col', c: [nested] },
+          sibling,
+        ] }],
+        ['text', nested.id, 'replace', 'retired update'],
+        ['text', sibling.id, 'replace', 'kept update'],
+        ['add', 'main.orphan', 'main.group.one', null, { id: 'main.orphan', k: 'text' }],
+        ['add', 'main.trailing', 'main.group', 'main.group.one', trailing],
+      ])
+      surface.forget(['main.group.one'])
+      input.send(reply({ ev: 'ack', sf: 'dsh', s: 1 }))
+      await vi.waitFor(() => expect(output.frames).toHaveLength(2))
+      expect(output.frames[1]!.ops).toEqual([
+        ['add', 'main.group', 'main', null, { id: 'main.group', k: 'col', c: [sibling] }],
+        ['text', sibling.id, 'replace', 'kept update'],
+        ['add', 'main.trailing', 'main.group', null, trailing],
+      ])
+    } finally { await session.close() }
   })
 
   it('keeps durable siblings while hidden, then resumes after child gone without reopening', async () => {
