@@ -29,6 +29,17 @@ type Step =
   | { action: string }
   | { answer: string }
   | { capture: string }
+  | { node: NodeMatch; timeout_sec?: number }
+  | { node_after: NodeMatch; timeout_sec?: number }
+  | { release_approval: true }
+
+interface NodeMatch {
+  id?: string
+  contains?: string
+  text?: string
+  cursor?: number
+  sendable?: boolean
+}
 
 interface PtyResult {
   exit_code: number | null
@@ -38,7 +49,14 @@ interface PtyResult {
   output: string
   failure?: string
   actions_sent?: { label: string; id: string }[]
-  captures?: Record<string, { byte_offset: number; frame_count: number }>
+  captures?: Record<string, {
+    byte_offset: number
+    frame_count: number
+    composer?: Record<string, unknown>
+  }>
+  frames?: Record<string, unknown>[]
+  wire_errors?: string[]
+  nodes?: Record<string, { k: string; p: Record<string, unknown> }>
 }
 
 interface RecordEvent {
@@ -67,6 +85,8 @@ function isolatedEnv(dir: string): Record<string, string> {
     DSH_AGENTS_HOME: join(dir, 'agents'),
     DSH_TUI_TEST_STORE: join(dir, 'sessions'),
     DSH_TUI_TEST_WORKSPACE: dir,
+    // Only approval fixture actions opt into this event-driven handoff.
+    DSH_TUI_APPROVAL_BARRIER: '1',
     DSH_TSP_RECORD: join(dir, 'metadata.jsonl'),
     DSH_TSP_RECORD_FULL: join(dir, 'full-wire.jsonl'),
     DSH_TELEMETRY_DISABLED: '1',
@@ -121,6 +141,11 @@ async function execute(
   }
   expect(response.failure, response.output).toBeUndefined()
   expect(response.timed_out, response.output).toBe(false)
+  if (mode === 'native') {
+    expect(response.hello_sent, response.output).toBe(true)
+    expect(response.frames?.length, 'no reassembled native TSP frames').toBeGreaterThan(0)
+    expect(response.wire_errors, 'malformed/incomplete outbound TSP').toEqual([])
+  }
   return response
 }
 
@@ -159,13 +184,31 @@ function users(log: History): string[] {
   })
 }
 
-function committed(log: History): string[] {
+interface AssistantRecord {
+  event: RecordEvent
+  text: string
+  toolCallIds: string[]
+  interrupted: boolean
+}
+function assistantMessages(log: History): AssistantRecord[] {
   return log.events.flatMap(event => {
     if (event.type !== 'assistant/message') return []
     const message = event.data?.['message']
-    return message && typeof message === 'object'
-      ? [content((message as { content?: unknown }).content)] : []
+    if (!message || typeof message !== 'object') return []
+    const blocks = (message as { content?: unknown }).content
+    const toolCallIds = Array.isArray(blocks) ? blocks.flatMap(block =>
+      block && typeof block === 'object' && block.type === 'tool-call'
+        && typeof block.id === 'string' ? [block.id] : []) : []
+    return [{
+      event, text: content(blocks), toolCallIds,
+      interrupted: event.data?.['interrupted'] === true,
+    }]
   })
+}
+
+/** Tool-call-only assistant messages are durable but have no textual reply. */
+function committedText(log: History): string[] {
+  return assistantMessages(log).map(item => item.text).filter(text => text.length > 0)
 }
 
 interface Pair {
@@ -216,12 +259,12 @@ async function markerExists(dir: string): Promise<boolean> {
   }
 }
 
-function frames(output: string): Record<string, unknown>[] {
-  return Array.from(output.matchAll(/\x1b_tsp;f;([\s\S]*?)\x1b\\/g)).map(
-    match => JSON.parse(match[1]!) as Record<string, unknown>)
+function frames(run: PtyResult): Record<string, unknown>[] {
+  // Python returns only complete APC frames, after byte-exact c/m reassembly.
+  return run.frames ?? []
 }
 
-function allAddedIds(output: string): string[] {
+function allAddedIds(run: PtyResult): string[] {
   const visit = (value: unknown): string[] => {
     if (!value || typeof value !== 'object') return []
     const node = value as { id?: unknown; c?: unknown }
@@ -230,7 +273,7 @@ function allAddedIds(output: string): string[] {
       ...(Array.isArray(node.c) ? node.c.flatMap(visit) : []),
     ]
   }
-  return frames(output).flatMap(frame => {
+  return frames(run).flatMap(frame => {
     if (!Array.isArray(frame['ops'])) return []
     return frame['ops'].flatMap(op =>
       Array.isArray(op) && op[0] === 'add' ? visit(op[4]) : [])
@@ -239,31 +282,42 @@ function allAddedIds(output: string): string[] {
 
 function expectOneStableToolCard(run: PtyResult, callId: string): void {
   const id = 'main.tool.' + callId
-  const added = allAddedIds(run.output)
+  const added = allAddedIds(run)
   expect(added.filter(item => item === id), 're-added/orphan native tool card: ' + id)
     .toHaveLength(1)
-  const wire = JSON.stringify(frames(run.output))
-  expect(wire).toContain(id)
-  expect(wire).toContain('Running tui_fixture_effect')
-  expect(wire).toContain('Tool result: DSH_TUI_FIXTURE_OK')
-  expect(wire).not.toContain('Interrupted tui_fixture_effect')
+  expect(run.nodes?.[id + '.body']?.p['text'], 'real final semantic tool body: ' + id)
+    .toBe('Tool result: DSH_TUI_FIXTURE_OK')
+  expect(run.nodes?.[id]?.p['role']).toBe('dsh.tool')
+  expect(JSON.stringify(frames(run))).not.toContain('Interrupted tui_fixture_effect')
+  expect(run.wire_errors).toEqual([])
 }
 
+const draftText = "α😀\nsecondZ"
+const draftCaret = "α😀\nsecond".length
+
 function expectBlockedComposer(run: PtyResult): void {
-  const count = run.captures?.['blocked']?.frame_count
-  expect(typeof count, 'no native prompt checkpoint').toBe('number')
-  const openFrames = frames(run.output).slice(0, count)
-  // This must be emitted by the real SDK on the normal composer while a
-  // production service owns the prompt; a fake UI event cannot satisfy it.
-  expect(JSON.stringify(openFrames)).toContain('"sendable":false')
+  const checkpoint = run.captures?.['blocked']
+  expect(checkpoint?.frame_count, 'no native prompt checkpoint').toBeGreaterThan(0)
+  expect(checkpoint?.composer, 'real normal composer while safety owns input').toMatchObject({
+    text: draftText, cursor: draftCaret, sendable: false,
+  })
+}
+
+function expectRestoredComposer(run: PtyResult): void {
+  expect(run.captures?.['restored']?.composer).toMatchObject({
+    text: draftText, cursor: draftCaret, sendable: true,
+  })
 }
 
 const nativeDraft: Step[] = [
-  { wait: '\x1b_tsp;o;' },
   { write: 'α😀' },
-  { hex: '1b5b3230307e' }, { write: '\nsecondZ' }, { hex: '1b5b3230317e' },
-  { wait: 'secondZ' },
+  { hex: '1b5b3230307e' }, { write: '\\nsecondZ' }, { hex: '1b5b3230317e' },
+  { node: { id: 'dock.composer.line.input', text: draftText } },
   { hex: '1b5b44' }, // real SDK Left: caret immediately before Z
+  { node_after: {
+    id: 'dock.composer.line.input', text: draftText,
+    cursor: draftCaret, sendable: true,
+  } },
 ]
 const nativeSend = (text: string): Step => ({
   event: { ev: 'send', sf: 'dsh', id: 'dock.composer.line.input', text },
@@ -278,9 +332,13 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
         { write: '[tool]\r' },
         { wait: '[tool] Running tui_fixture_effect' },
         { wait: 'Tool result: DSH_TUI_FIXTURE_OK' },
-        { write: '[tool]\r' },
+        { wait_after: '[dsh] tool settled' },
+        { wait_after: '[dsh] Ready' },
+        { write: '[tool]\\r' },
         { wait_after: 'Tool result: DSH_TUI_FIXTURE_OK' },
-        { write: '/quit\r' },
+        { wait_after: '[dsh] tool settled' },
+        { wait_after: '[dsh] Ready' },
+        { write: '/quit\\r' },
       ])
       expect(run.exit_code, run.output).toBe(0)
       const log = await history(dir)
@@ -292,7 +350,11 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
         expect(pair.name).toBe('tui_fixture_effect')
         expect(toolOutput(pair)).toBe('DSH_TUI_FIXTURE_OK')
       }
-      expect(committed(log)).toEqual(['tool settled', 'tool settled'])
+      expect(committedText(log)).toEqual(['tool settled', 'tool settled'])
+      expect(assistantMessages(log).flatMap(item => item.toolCallIds))
+        .toEqual(pairs.map(pair => pair.id))
+      expect(assistantMessages(log).filter(item => item.toolCallIds.length > 0))
+        .toHaveLength(2)
       expect(run.output).not.toContain('Interrupted tui_fixture_effect')
     }), 155_000)
 
@@ -301,8 +363,10 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
       const first = await execute(dir, 'native-first', 'native', [
         { wait: '\x1b_tsp;o;' },
         nativeSend('[tool]'),
-        { wait: 'Running tui_fixture_effect' },
-        { wait: 'Tool result: DSH_TUI_FIXTURE_OK' },
+        { node: { contains: 'Running tui_fixture_effect' } },
+        { node_after: { contains: 'Tool result: DSH_TUI_FIXTURE_OK' } },
+        { node_after: { contains: 'tool settled' } },
+        { node_after: { id: 'dock.status.label', contains: ' · idle' } },
         nativeExit,
       ])
       expect(first.exit_code, first.output).toBe(0)
@@ -314,8 +378,10 @@ describe.skipIf(process.platform !== 'linux')('RFC #6 real public-service keyles
       const resumed = await execute(dir, 'native-resumed', 'native', [
         { wait: '\x1b_tsp;o;' },
         nativeSend('[tool]'),
-        { wait: 'Running tui_fixture_effect' },
-        { wait: 'Tool result: DSH_TUI_FIXTURE_OK' },
+        { node: { contains: 'Running tui_fixture_effect' } },
+        { node_after: { contains: 'Tool result: DSH_TUI_FIXTURE_OK' } },
+        { node_after: { contains: 'tool settled' } },
+        { node_after: { id: 'dock.status.label', contains: ' · idle' } },
         nativeExit,
       ], { sessionId: initial.id })
       expect(resumed.exit_code, resumed.output).toBe(0)
