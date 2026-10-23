@@ -16,12 +16,15 @@ function terminalFixture() {
   let ended = false
   const frames: Array<{ main: unknown[]; dock: unknown[]; layer: unknown[] }> = []
   const surfaces: TernSurface[] = []
+  const settled: string[] = []
   const session: TernSession = {
+    caps: { kinds: ['card', 'md', 'editor', 'input', 'text', 'row', 'col', 'button'], features: ['settle'] },
     open(): TernSurface {
       const surface: TernSurface = {
         closed: false,
         render(view) { frames.push(view) },
         focus() {},
+        settle(id) { settled.push(id) },
       }
       surfaces.push(surface)
       return surface
@@ -38,7 +41,7 @@ function terminalFixture() {
   const sdk: TernSDK = { connect: async () => null, node }
   const term = new NativeTerminal(sdk, session)
   return {
-    term, frames, surfaces,
+    term, frames, surfaces, settled,
     push(input: SessionInput) { queue.push(input); wake?.() },
     async drain() { await new Promise(resolve => setImmediate(resolve)) },
   }
@@ -116,6 +119,19 @@ describe('native-profile RED behavioral witnesses against the real SDK decoder',
       toolCallId: 'call-2', isError: true, content: [{ type: 'text', text: 'failed' }],
     } }))
     expect(history.snapshot().entries.at(-1)).toMatchObject({ id: 'tool.call-2', kind: 'error' })
+  })
+
+  it('settles only durable tool results and recovers a gone native surface', async () => {
+    const f = terminalFixture()
+    await f.term.start(() => {}, () => {}, () => {})
+    f.term.update({ ...empty, entries: [{ id: 'tool.one', kind: 'tool', text: 'Running bash' }] })
+    expect(f.settled).not.toContain('main.tool.one')
+    f.term.update({ ...empty, entries: [{ id: 'tool.one', kind: 'tool', text: 'Tool result: done' }] })
+    expect(f.settled).toContain('main.tool.one')
+    f.push({ type: 'event', event: { ev: 'gone', sf: 'dsh', ids: ['dsh'], raw: {} } })
+    await f.drain()
+    expect(f.surfaces).toHaveLength(2)
+    await f.term.closed()
   })
 
   it('does not leave a cancelled outstanding tool marked running', () => {
