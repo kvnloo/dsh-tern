@@ -246,12 +246,14 @@ def surface(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
                             f"{name}: malformed focus target (string or null)")
                 elif tag == "reveal":
                     require(len(op) == 3 and nonempty(op[1]) and
-                            op[2] in ("start", "center", "end", "nearest"),
+                            op[2] in ("start", "end", "nearest"),
                             f"{name}: malformed reveal target/alignment")
                 elif tag == "scroll":
                     require(len(op) == 3 and nonempty(op[1]) and
-                            op[2] in ("start", "end"),
-                            f"{name}: malformed scroll target/direction")
+                            op[2] in ("line-up", "line-down", "page-up",
+                                      "page-down", "start", "end") and
+                            "scroll" in hello["features"],
+                            f"{name}: malformed scroll direction or unoffered feature")
                 elif tag in ("suspend", "resume"):
                     require(len(op) == 1, f"{name}: malformed {tag} operation")
                 else:
