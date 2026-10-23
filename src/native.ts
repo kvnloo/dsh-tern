@@ -283,6 +283,39 @@ export class NativeTerminal implements Terminal {
         ? this.wrap(id, 'dsh.assistant', [this.textNode('stream', safeText(snapshot.live), true)])
         : this.textNode(id, safeText(snapshot.live), true))
     }
+    // Public plan, task, job and child facts use durable identities and source
+    // lifecycle labels. The renderer does not synthesize completion percentages.
+    const product = snapshot.product
+    if (product?.model) main.push(this.wrap('state.model', 'dsh.model', [
+      this.textNode('route', 'Model · ' + product.model.provider + '/' + product.model.model),
+    ]))
+    if (product?.plan) main.push(this.wrap('state.plan', 'dsh.plan', [
+      this.textNode('mode', 'Plan · ' + (product.plan.active ? 'active' : 'inactive')
+        + (product.plan.pending === undefined ? '' : ' · pending ' + String(product.plan.pending))),
+    ]))
+    for (const task of product?.tasks ?? []) {
+      main.push(this.wrap('state.' + task.id, 'dsh.task', [
+        this.textNode('status', task.status + ' · ' + task.text),
+      ]))
+    }
+    for (const job of product?.jobs ?? []) {
+      main.push(this.wrap('state.job.' + job.id, 'dsh.job', [
+        this.textNode('status', job.id + ' · ' + job.status + ' · ' + job.label
+          + (job.progress ? ' · ' + job.progress : '') + (job.detail ? ' · ' + job.detail : '')),
+      ]))
+    }
+    for (const child of product?.children ?? []) {
+      main.push(this.wrap('state.child.' + child.id, 'dsh.subagent', [
+        this.textNode('status', child.id + ' · ' + child.mode + ' · '
+          + child.activity + ' · ' + child.label),
+      ]))
+    }
+    if (product?.detail) {
+      main.push(this.wrap('detail.' + product.detail.id, 'dsh.detail', [
+        this.textNode('title', product.detail.title),
+        this.textNode('body', product.detail.text, true),
+      ]))
+    }
     const editorKind = this.supported('editor', 'input')
     const status = this.textNode(Boolean(this.supported('row', 'col')) ? 'label' : 'status',
       'dsh · ' + snapshot.sessionId + ' · ' + snapshot.status)
@@ -382,8 +415,15 @@ export class NativeTerminal implements Terminal {
     }
   }
 
+  restoreDraft(text: string): void {
+    if (this.prompt) return
+    this.draft.restore(text, text.length)
+    this.render()
+  }
+
   update(snapshot: Snapshot): void {
     this.last = snapshot
+    this.recorder?.setSessionId(snapshot.sessionId)
     this.recorder ??= new TspRecorder(process.env.DSH_TSP_RECORD, snapshot.sessionId)
     if (!this.prompt && !this.draft.text && snapshot.draft) {
       this.draft.restore(snapshot.draft, snapshot.cursor)

@@ -15,6 +15,8 @@ export interface Ask {
 export interface Terminal {
   start(submit: (text: string) => void, interrupt: () => void, quit: (error?: Error) => void): Promise<void>
   update(snapshot: Snapshot): void
+  /** Restore the canonical unsent composer value after a transient navigation. */
+  restoreDraft(text: string): void
   ask(request: Ask): Promise<string | null>
   closed(): Promise<void>
 }

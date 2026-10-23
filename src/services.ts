@@ -96,6 +96,30 @@ export class ProductServices {
     return children
   }
 
+  async inspectChild(parent: SessionId, childId: string): Promise<ProductState['detail']> {
+    const runtime = this.ctx.get('subagents')
+    if (!runtime) throw new Error('subagent roster requires subagents service')
+    const row = (await runtime.listDescendants(parent)).find(item => item.id === childId)
+    if (!row) throw new Error('child is not in the public descendant roster: ' + childId)
+    const facts = [
+      'Session: ' + row.id,
+      'Parent: ' + row.parentId,
+      'Depth: ' + row.depth,
+      ...(row.kind === 'child'
+        ? ['Mode: ' + row.mode, 'Activity: ' + row.activity, 'Label: ' + (row.label ?? row.id)]
+        : ['Diagnostic: ' + row.reason]),
+    ]
+    const query = this.ctx.get('sessionQuery')
+    if (query) {
+      const surface = await query.readSurface(row.id)
+      facts.push('Observed through event: ' + String(surface.capturedThroughSeq ?? 'none'))
+      facts.push('Current surface events: ' + surface.events.length)
+    }
+    const detail = { id: String(row.id), title: 'Subagent ' + row.id, text: facts.join('\n') }
+    this.details.set(parent, detail)
+    return detail
+  }
+
   private async child(parent: SessionId, childId: string): Promise<SubagentDescendantListEntry & { kind: 'child' }> {
     const runtime = this.ctx.get('subagents')
     if (!runtime) throw new Error('subagent control requires subagents service')

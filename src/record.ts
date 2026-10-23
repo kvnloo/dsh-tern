@@ -104,8 +104,12 @@ export class TspRecorder {
   private context: { revision?: number; eventSeq?: number } = {}
   private capabilities: (() => Caps | undefined) | undefined
 
-  constructor(private readonly path: string | undefined, private readonly sessionId: string) {
+  constructor(private readonly path: string | undefined, private sessionId: string) {
     this.enabled = Boolean(path)
+  }
+
+  setSessionId(sessionId: string): void {
+    this.sessionId = sessionId
   }
 
   setContext(context: { revision?: number; eventSeq?: number }): void {

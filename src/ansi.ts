@@ -31,6 +31,8 @@ export class AnsiTerminal implements Terminal {
   private pending: ((text: string | null) => void) | undefined
   private lastStatus: Snapshot['status'] = 'idle'
   private lastNotice = ''
+  private lastSession = ''
+  private readonly shownFacts = new Map<string, string>()
 
   constructor(private readonly io: AnsiStreams = { stdin: process.stdin, stdout: process.stdout }) {}
 
@@ -66,6 +68,13 @@ export class AnsiTerminal implements Terminal {
   }
 
   update(snapshot: Snapshot): void {
+    if (this.lastSession !== snapshot.sessionId) {
+      this.lastSession = snapshot.sessionId
+      this.shown.clear()
+      this.shownFacts.clear()
+      this.lastNotice = ''
+      this.lastStatus = 'idle'
+    }
     for (const entry of snapshot.entries) {
       const previous = this.shown.get(entry.id)
       const line = lineOf(entry)
@@ -81,7 +90,43 @@ export class AnsiTerminal implements Terminal {
       this.lastNotice = snapshot.notice
       this.io.stdout.write('[dsh] ' + safeText(snapshot.notice) + '\n')
     }
+    const facts: Array<[string, string]> = []
+    const product = snapshot.product
+    if (product?.model) facts.push(['model', 'Model: ' + product.model.provider + '/' + product.model.model])
+    if (product?.plan) facts.push(['plan', 'Plan: ' + (product.plan.active ? 'active' : 'inactive')
+      + (product.plan.pending === undefined ? '' : ' · pending ' + product.plan.pending)])
+    for (const task of product?.tasks ?? []) {
+      facts.push(['task.' + task.id, 'Task [' + task.status + '] ' + task.id + ': ' + task.text])
+    }
+    for (const job of product?.jobs ?? []) {
+      facts.push(['job.' + job.id, 'Job ' + job.id + ' [' + job.status + '] ' + job.label
+        + (job.progress ? ' · ' + job.progress : '') + (job.detail ? ' · ' + job.detail : '')])
+    }
+    for (const child of product?.children ?? []) {
+      facts.push(['child.' + child.id, 'Child ' + child.id + ' [' + child.activity + '] '
+        + child.mode + ' · ' + child.label])
+    }
+    if (product?.detail) {
+      facts.push(['detail.' + product.detail.id, product.detail.title + '\n' + product.detail.text])
+    }
+    for (const [id, text] of facts) {
+      const line = '[dsh] ' + safeText(text) + '\n'
+      if (this.shownFacts.get(id) === line) continue
+      this.shownFacts.set(id, line)
+      this.io.stdout.write(line)
+    }
+    const present = new Set(facts.map(([id]) => id))
+    for (const id of this.shownFacts.keys()) {
+      if (!present.has(id)) this.shownFacts.delete(id)
+    }
     this.input?.prompt(true)
+  }
+
+  restoreDraft(text: string): void {
+    if (!this.input || this.pending) return
+    this.input.line = text
+    this.input.cursor = text.length
+    this.input.prompt(true)
   }
 
   ask(request: Ask): Promise<string | null> {
