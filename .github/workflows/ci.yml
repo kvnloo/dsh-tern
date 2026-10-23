@@ -1,0 +1,74 @@
+name: standalone DSH Tern qualification
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  standalone:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact plugin head
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Checkout pinned, unmodified DSH host
+        uses: actions/checkout@v4
+        with:
+          repository: kvnloo/deepseek-harness
+          ref: 5badb15009ae1756c3afe0ae0cef1faafc290ccc
+          path: _host
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+          run_install: false
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify immutable test inputs
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git -C _host rev-parse HEAD)" = 5badb15009ae1756c3afe0ae0cef1faafc290ccc
+          git status --short
+          git -C _host status --short
+      - name: Frozen host installation
+        working-directory: _host
+        run: pnpm install --frozen-lockfile
+      - name: Build real host CLI and source aliases
+        working-directory: _host
+        run: |
+          pnpm run gen-tsconfig-paths
+          pnpm run build
+      - name: Frozen standalone installation
+        run: pnpm install --frozen-lockfile
+      - name: Build standalone packed plugin
+        run: pnpm run build
+      - name: Typecheck standalone
+        run: pnpm run typecheck
+      - name: Parse Python and native shell
+        run: |
+          python3 -m py_compile tests/host/harness/*.py
+          bash -n tests/host/harness/private_tern.sh
+      - name: Unit tests (all retained modules)
+        run: pnpm run test:unit
+      - name: Real public Agent Session PTY (source)
+        env:
+          DSH_HOST_ROOT: ${{ github.workspace }}/_host
+        run: pnpm run test:public:source
+      - name: Real public Agent Session PTY (lib)
+        env:
+          DSH_HOST_ROOT: ${{ github.workspace }}/_host
+        run: pnpm run test:public:lib
+      - name: Packed consumer SDK and registry negative control
+        run: pnpm run test:packed

@@ -1,0 +1,8 @@
+packages:
+  - .
+patchedDependencies:
+  '@stencil-hq/tern@0.1.0': patches/@stencil-hq__tern@0.1.0.patch
+# Reviewed native build for the standalone compiler; other scripts require
+# normal explicit pnpm build approval. No host or provider dependencies vendored.
+allowBuilds:
+  esbuild: true

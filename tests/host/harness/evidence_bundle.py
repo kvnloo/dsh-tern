@@ -42,6 +42,7 @@ IMAGE = re.compile(r"[A-Za-z0-9._-]+\.(png|webp|jpg|jpeg)\Z")
 FIXTURES = ("fixtures/cordis.yml", "fixtures/deterministic.json")
 REQUIRED = (
     "control/git-sha", "control/tern-version", "control/tern-binary-sha256",
+    "control/plugin.json", "plugin/plugin.tgz",
     "control/launcher.json", "control/capture.json", "control/evidence-mode",
     "control/replies.tsv", "log/sway.log", "log/tern-serve.log",
 )
@@ -55,7 +56,7 @@ CONTROL = {
 LOGS = {
     "log/sway.log", "log/tern-serve.log", "log/tern-ctl.err",
     "log/metadata.jsonl", "log/dsh-sdk-wire.jsonl", "log/replay-source.jsonl",
-    "log/dsh-exit.log", "log/dsh-process.log",
+    "log/dsh-exit.log", "log/dsh-process.log", "log/plugin-install.log",
 }
 
 
@@ -205,6 +206,7 @@ def manifest(root: Path, chosen: dict[str, Path], stage: Path,
     version = (root / "control/tern-version").read_text(encoding="utf-8").strip()
     binary_sha = (root / "control/tern-binary-sha256").read_text(encoding="utf-8").strip()
     build = load_object(root / "control/launcher.json")
+    plugin = load_object(root / "control/plugin.json")
     capture = load_object(root / "control/capture.json")
     require(bool(SHA40.fullmatch(sha)), "missing exact source Git SHA")
     require(mode in ("live", "replay"), "evidence-mode must be live or replay")
@@ -216,6 +218,15 @@ def manifest(root: Path, chosen: dict[str, Path], stage: Path,
             build.get("hash_origin") in ("measured-locally", "declared-remote") and
             isinstance(build.get("provenance"), str) and bool(build["provenance"].strip()),
             "launcher source/build SHA, location, hash origin and provenance required")
+    require(bool(SHA40.fullmatch(str(plugin.get("source_sha", "")))) and
+            bool(SHA64.fullmatch(str(plugin.get("artifact_sha256", "")))) and
+            plugin.get("location") == "local" and
+            plugin.get("hash_origin") == "measured-locally" and
+            isinstance(plugin.get("provenance"), str) and bool(plugin["provenance"].strip()),
+            "separate exact plugin source/artifact provenance required")
+    require("plugin/plugin.tgz" in chosen and
+            sha256(chosen["plugin/plugin.tgz"]) == plugin["artifact_sha256"],
+            "sealed plugin tarball does not match its independent SHA256")
     require((build["location"] == "local") == (build["hash_origin"] == "measured-locally"),
             "remote artifact hash must not be described as measured locally")
     require(capture.get("capture_id") and isinstance(capture["capture_id"], str) and
@@ -293,7 +304,7 @@ def manifest(root: Path, chosen: dict[str, Path], stage: Path,
         "scope": scope, "capture_id": capture["capture_id"],
         "git_sha": sha, "tern_version": version,
         "tern_binary_sha256": binary_sha, "model_id": capture["model_id"],
-        "workspace_start": workspace, "launcher": build,
+        "workspace_start": workspace, "launcher": build, "plugin": plugin,
         "collector": capture["collector"], "wire_file": wire_name,
         "record_counts": counts, "include_fixtures": include_fixtures,
         "files": entries,

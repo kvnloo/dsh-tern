@@ -1,5 +1,5 @@
-# Interactive TUI over dsh-base. The renderer owns presentation; Agent and
-# Session remain the public durable model. Never mount HTTP or browser rows.
+# An additive dsh.bundle.patch layer applied after dsh-base.
+# Agent and Session remain owned by the unmodified host.
 - id: system-prompt
   config:
     personaSuffix: Your working directory is {{cwd}}.
@@ -12,9 +12,9 @@
 
 - insert:
     - id: tui-startup
-      name: '@deepseek-ai/dsh-tui-app/startup'
+      name: '@kvnloo/dsh-tern/startup'
     - id: tui-app
-      name: '@deepseek-ai/dsh-tui-app'
+      name: '@kvnloo/dsh-tern'
       inject: [tuiStartup]
       config:
         sessionId: !!js ctx.tuiStartup.sessionId

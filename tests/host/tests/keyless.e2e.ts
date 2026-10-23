@@ -5,17 +5,25 @@
  */
 import { chmod, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { realpathSync } from 'node:fs'
+import { basename, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execa } from 'execa'
 import { describe, expect, it } from 'vitest'
 import { resolveExampleLaunch, resolveExampleMode } from '@deepseek-ai/dsh-loader-smoke'
 
-const root = fileURLToPath(new URL('../../../../../../', import.meta.url))
-const cli = fileURLToPath(new URL('../../../../src/bin.ts', import.meta.url))
+// Both source and lib launch the separately checked-out, unmodified DSH host.
+const hostPath = process.env.DSH_HOST_ROOT
+if (!hostPath || !isAbsolute(hostPath)) throw new Error('DSH_HOST_ROOT must be an absolute DSH checkout')
+const root = realpathSync(hostPath)
+const cli = join(root, 'apps/cli/src/bin.ts')
+const profileHome = process.env.DSH_TUI_PROFILE_HOME
+if (!profileHome || !isAbsolute(profileHome)) {
+  throw new Error('DSH_TUI_PROFILE_HOME must be an installed private profile root')
+}
 const config = fileURLToPath(new URL('../fixtures/cordis.yml', import.meta.url))
 const ptyDriver = fileURLToPath(new URL('../harness/pty_driver.py', import.meta.url))
-const tsconfig = fileURLToPath(new URL('../../../../../../tsconfig.json', import.meta.url))
+const tsconfig = join(root, 'tsconfig.json')
 
 const launch = resolveExampleLaunch({
   srcBin: cli, mode: resolveExampleMode(), sourceImport: 'tsx/esm', tsconfigPath: tsconfig,
@@ -63,7 +71,7 @@ function testEnvironment(privateDir: string): Record<string, string> {
     HOME: join(privateDir, 'home'),
     XDG_CONFIG_HOME: join(privateDir, 'config'),
     XDG_CACHE_HOME: join(privateDir, 'cache'),
-    DSH_HOME: join(privateDir, 'dsh'),
+    DSH_HOME: profileHome,
     DSH_AGENTS_HOME: join(privateDir, 'agents'),
     DSH_TUI_TEST_STORE: join(privateDir, 'sessions'),
     DSH_TSP_RECORD: join(privateDir, 'metadata.jsonl'),
