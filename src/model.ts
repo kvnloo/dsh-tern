@@ -17,6 +17,7 @@ export interface Snapshot {
   readonly sessionId: string
   readonly entries: readonly Entry[]
   readonly live: string
+  readonly liveId?: string
   readonly status: 'idle' | 'running'
   readonly draft: string
   readonly cursor: number
@@ -44,8 +45,11 @@ export function textContent(content: readonly unknown[]): string {
 export class Transcript {
   readonly sessionId: string
   private readonly seen = new Set<number>()
+  private readonly rowSequence = new Map<string, number>()
+  private readonly runningTools = new Map<string, { turn: number; name: string }>()
   private rows: Entry[] = []
   private attempt: string | undefined
+  private previewId: string | undefined
   private preview = ''
   private currentStatus: 'idle' | 'running' = 'idle'
   private currentDraft = ''
@@ -65,16 +69,29 @@ export class Transcript {
     }
   }
 
+  private upsert(entry: Entry, seq: number): void {
+    const at = this.rows.findIndex(row => row.id === entry.id)
+    if (at < 0) this.rows.push(entry)
+    else this.rows[at] = entry
+    this.rowSequence.set(entry.id, seq)
+    while (this.rows.length > MAX_ENTRIES) {
+      const removed = this.rows.shift()!
+      this.rowSequence.delete(removed.id)
+      this.runningTools.delete(removed.id)
+    }
+  }
+
   accept(event: SessionEvent): Entry | undefined {
     if (this.seen.has(event.seq)) return
     this.seen.add(event.seq)
-    // Session compaction/rewrite replaces the current visible surface range;
-    // replaying obsolete nodes as new history would show false duplicates.
     if (event.surfaceOp && typeof event.surfaceOp !== 'string') {
       const { startSeq, endSeq } = event.surfaceOp
       this.rows = this.rows.filter(row => {
-        const seq = Number(row.id.slice('event.'.length))
-        return !(seq >= startSeq && seq <= endSeq)
+        const seq = this.rowSequence.get(row.id)
+        if (seq === undefined || seq < startSeq || seq > endSeq) return true
+        this.rowSequence.delete(row.id)
+        this.runningTools.delete(row.id)
+        return false
       })
     }
     const id = 'event.' + event.seq
@@ -84,19 +101,31 @@ export class Transcript {
         entry = { id, kind: 'user', text: textContent(event.data.content) }
         break
       case 'assistant/message':
-        entry = { id, kind: 'assistant', text: textContent(event.data.message.content) }
+        entry = {
+          id: 'assistant.' + event.data.turn + '.' + event.data.step,
+          kind: 'assistant',
+          text: textContent(event.data.message.content),
+        }
         this.preview = ''
+        this.previewId = undefined
         this.attempt = undefined
         break
-      case 'tool/call':
-        entry = { id, kind: 'tool', text: 'Running ' + safeText(event.data.name) }
+      case 'tool/call': {
+        const toolId = 'tool.' + event.data.callId
+        entry = { id: toolId, kind: 'tool', text: 'Running ' + safeText(event.data.name) }
+        this.runningTools.set(toolId, { turn: event.data.turn, name: event.data.name })
         break
-      case 'tool/result':
+      }
+      case 'tool/result': {
+        const toolId = 'tool.' + event.data.message.callId
         entry = {
-          id, kind: event.data.message.isError ? 'error' : 'tool',
+          id: toolId,
+          kind: event.data.message.isError ? 'error' : 'tool',
           text: 'Tool result: ' + textContent(event.data.message.content),
         }
+        this.runningTools.delete(toolId)
         break
+      }
       case 'turn/start':
         this.currentStatus = 'running'
         break
@@ -104,6 +133,12 @@ export class Transcript {
         this.currentStatus = 'idle'
         this.attempt = undefined
         this.preview = ''
+        this.previewId = undefined
+        for (const [toolId, tool] of this.runningTools) {
+          if (tool.turn !== event.data.turn) continue
+          this.runningTools.delete(toolId)
+          this.upsert({ id: toolId, kind: 'error', text: 'Interrupted ' + safeText(tool.name) }, event.seq)
+        }
         if (event.data.reason.kind === 'error') {
           entry = { id, kind: 'error', text: safeText(event.data.reason.error.message) }
         }
@@ -111,10 +146,7 @@ export class Transcript {
       default:
         break
     }
-    if (entry) {
-      this.rows.push(entry)
-      if (this.rows.length > MAX_ENTRIES) this.rows.splice(0, this.rows.length - MAX_ENTRIES)
-    }
+    if (entry) this.upsert(entry, event.seq)
     return entry
   }
 
@@ -123,6 +155,7 @@ export class Transcript {
     if (frame.type === 'start') {
       this.attempt = frame.attemptId
       this.preview = ''
+      this.previewId = 'assistant.' + frame.turn + '.' + frame.step
     } else if (frame.type === 'chunk' && frame.attemptId === this.attempt) {
       if (frame.chunk.type === 'text-delta') {
         this.preview = safeText(this.preview + frame.chunk.text)
@@ -130,6 +163,7 @@ export class Transcript {
     } else if (frame.type === 'end' && frame.attemptId === this.attempt) {
       this.attempt = undefined
       this.preview = ''
+      this.previewId = undefined
     }
   }
 
@@ -144,6 +178,7 @@ export class Transcript {
       sessionId: this.sessionId,
       entries: [...this.rows],
       live: this.preview,
+      ...(this.previewId ? { liveId: this.previewId } : {}),
       status: this.currentStatus,
       draft: this.currentDraft,
       cursor: this.currentCursor,
