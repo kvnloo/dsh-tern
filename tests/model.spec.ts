@@ -72,7 +72,7 @@ describe('single durable projection', () => {
     const events: SessionEvent[] = [
       { seq: SessionSeq(0), time: 0, type: 'turn/start', data: { turn: 4 } },
       {
-        seq: SessionSeq(1), time: 1, type: 'user/message',
+        seq: SessionSeq(1), time: 1, type: 'user/message', surfaceOp: 'append',
         data: createUserMessage({ content: [{ type: 'text', text: 'question' }], source: { kind: 'user' } }),
       },
       durable,
