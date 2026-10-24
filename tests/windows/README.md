@@ -62,6 +62,15 @@ The restart case also reads only after confirmed close. Content mismatches
 retain only counts, UTF-8 lengths, hashes and known-expected comparison booleans,
 never raw Session text. Exact expectations are not normalized or relaxed.
 
+The ANSI fencing inputs match the Linux post-prompt case: valid late TSP hello
+over split APC and OSC877 carriers, unsupported-version and foreign-terminal
+TSP replies, and malformed TSP JSON. A non-TSP `ESC _ foreign;...` APC is not
+a foreign-terminal TSP reply: the published SDK deliberately passes non-TSP
+bytes through as keys, so it is not included in the protocol-isolation input.
+Exact Unicode user/reply assertions remain unchanged and run after child exit.
+The independent opt-out phase runs before fencing so a fencing RED cannot hide
+the opt-out result.
+
 ## Reproduce on an actual Windows machine (PowerShell)
 
 Start with two separate **clean** local Git checkouts of the exact pinned host
@@ -158,10 +167,10 @@ The mandatory gate checks, in order:
    hidden/gone/visible surface recovery and an additional real Agent turn.
 6. Native injected protocol error exits nonzero and releases the terminal;
    a freshly opened child successfully negotiates and completes `/quit`.
-7. DA1-first ANSI fallback fences malformed/foreign/late APC and OSC 877
-   input from becoming a user request; precise persisted intent and response.
-8. Explicit `--no-native` never probes a native surface and still completes
+7. Explicit `--no-native` never probes a native surface and still completes
    a real multi-turn-capable Agent profile request.
+8. DA1-first ANSI fallback fences malformed/foreign/late TSP APC and OSC 877
+   input from becoming a user request; precise persisted intent and response.
 
 These are eleven enforced phase records, covering seven actual ConPTY child
 launches and four independently installed private profiles if all phases run.
