@@ -219,7 +219,7 @@ async function preflight() {
     requireGate(peer.output.includes('CONPTY_TTY={"p":"win32","i":true,"o":true}'),
       'OS ConPTY did not attach real child stdin and stdout TTY')
     return { exitCode: peer.exit.code, childTtyInput: true, childTtyOutput: true }
-  } finally { peer.dispose() }
+  } finally { await peer.dispose() }
 }
 
 function userContent(blocks) {
@@ -273,10 +273,20 @@ function launch(sandbox, extra = [], mode = 'native') {
 }
 
 async function waitNative(peer) {
-  await peer.waitFor(() => peer.queryCount === 1 && peer.opens.some(o => o.id === 'dsh')
-    && peer.frames.some(f => f.sf === 'dsh'), 'real OSC877 hello + native semantic surface', 45_000)
-  peer.assertTransport()
-  requireGate(!peer.output.includes('dsh TUI (ANSI)'), 'unexpected silent ANSI fallback')
+  try {
+    await peer.waitFor(() => peer.queryCount === 1 && peer.opens.some(o => o.id === 'dsh')
+      && peer.frames.some(f => f.sf === 'dsh'), 'real OSC877 hello + native semantic surface', 45_000)
+    peer.assertTransport()
+    requireGate(!peer.output.includes('dsh TUI (ANSI)'), 'unexpected silent ANSI fallback')
+  } catch (error) {
+    // Do not export raw child output, paths, history or environment.
+    evidence.failedNegotiation = {
+      ...peer.stats(),
+      ansiFallbackObserved: peer.output.includes('dsh TUI (ANSI)'),
+      pluginImportFailureObserved: peer.output.includes('failed to import'),
+    }
+    throw error
+  }
 }
 
 async function waitNode(peer, condition, name, after = 0, ms = 45_000) {
@@ -346,7 +356,7 @@ async function nativeOne(sandbox) {
       durableAssistantCount: beforeQuit.assistants.length,
       durableToolResults: 1, transport: peer.stats(),
     }
-  } finally { peer.dispose() }
+  } finally { await peer.dispose() }
 }
 
 async function nativeResume(sandbox, sessionId) {
@@ -381,7 +391,7 @@ async function nativeResume(sandbox, sessionId) {
       resumedSameSession: true, durableUserCount: saved.users.length,
       durableAssistantCount: saved.assistants.length, transport: peer.stats(),
     }
-  } finally { peer.dispose() }
+  } finally { await peer.dispose() }
 }
 
 async function fallbackMalicious(sandbox) {
@@ -416,7 +426,7 @@ async function fallbackMalicious(sandbox) {
       durableUserCount: 1, durableAssistantCount: 1,
       maliciousCarriers: 4, transport: peer.stats(),
     }
-  } finally { peer.dispose() }
+  } finally { await peer.dispose() }
 }
 
 async function disabledNative(sandbox) {
@@ -434,7 +444,7 @@ async function disabledNative(sandbox) {
     requireGate(peer.exit.code === 0, 'opt-out /quit exit not zero')
     assertExact(durable(sandbox).users, ['disabled'], 'native opt-out Session')
     return { durableUserCount: 1, transport: peer.stats() }
-  } finally { peer.dispose() }
+  } finally { await peer.dispose() }
 }
 
 async function nativeErrorRecovery(sandbox) {
@@ -453,7 +463,7 @@ async function nativeErrorRecovery(sandbox) {
     requireGate(failed.output.includes('\x1b[?2004l'),
       'failure did not restore bracketed paste')
     crashExit = failed.exit.code
-  } finally { failed.dispose() }
+  } finally { await failed.dispose() }
 
   const recovered = launch(sandbox)
   try {
@@ -467,7 +477,7 @@ async function nativeErrorRecovery(sandbox) {
     await finishNative(recovered)
     return { crashExitCode: crashExit, recoveryExitCode: recovered.exit.code,
       transport: recovered.stats() }
-  } finally { recovered.dispose() }
+  } finally { await recovered.dispose() }
 }
 
 function safeFailure(error) {

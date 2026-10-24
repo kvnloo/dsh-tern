@@ -145,6 +145,12 @@ and credentials are not uploaded or committed. Temporary homes and artifacts
 are private to the runner and deleted after the gate; only the allowlisted
 synthetic summary survives.
 
+Negotiation failures retain only the existing synthetic transport counters and
+booleans for known ANSI fallback/import-failure labels, never raw child output.
+Teardown waits for the ConPTY child exit before releasing subscriptions and
+removing its workspace. The isolated shutdown regression checks this ordering,
+but is not native transport acceptance.
+
 A test-suite exit code of zero and the exact-head Actions job conclusion of
 `success` are **both required** to claim a green Windows native gate.
 If the OS strips OSC 877 or any other carrier, report that native transport

@@ -299,11 +299,17 @@ export class ConptyPeer {
     }
   }
 
-  dispose() {
-    if (!this.exit) {
-      try { this.pty.kill() } catch { /* only cleanup; failures already propagate */ }
+  async dispose() {
+    try {
+      if (!this.exit) {
+        this.pty.kill()
+        // ConPTY releases its child handles asynchronously. Keep the exit
+        // subscription alive until shutdown completes before removing files.
+        await this.waitForExit(20_000)
+      }
+    } finally {
+      this.dataSubscription.dispose()
+      this.exitSubscription.dispose()
     }
-    this.dataSubscription.dispose()
-    this.exitSubscription.dispose()
   }
 }
