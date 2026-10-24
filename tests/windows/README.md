@@ -49,6 +49,8 @@ if ((git -C $host rev-parse HEAD).Trim() -ne '5badb15009ae1756c3afe0ae0cef1faafc
 if (@(git -C $host status --porcelain --untracked-files=no).Count -gt 0) { throw 'modified host' }
 if ((node --version) -ne 'v24.11.0') { throw 'wrong Node' }
 if ((pnpm --version) -ne '11.7.0') { throw 'wrong pnpm' }
+node --check tests/windows/run.mjs
+if ($LASTEXITCODE) { throw 'ConPTY runner syntax RED' }
 
 Push-Location $host
 pnpm install --frozen-lockfile

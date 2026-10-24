@@ -56,6 +56,8 @@ jobs:
           if (@(git -C _host status --porcelain --untracked-files=no).Count -gt 0) { throw 'Host checkout is modified' }
           if ((node --version) -ne 'v24.11.0') { throw 'Node version changed' }
           if ((pnpm --version) -ne '11.7.0') { throw 'pnpm version changed' }
+          node --check tests/windows/run.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Frozen host dependency installation
         working-directory: _host
