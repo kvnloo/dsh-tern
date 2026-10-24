@@ -62,7 +62,7 @@ def read_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def manifest(path: Path, wire: Path) -> dict[str, Any]:
+def manifest(path: Path, wire: Path, require_plugin: bool = False) -> dict[str, Any]:
     data = read_json(path)
     require(data.get("mode") == "live" and data.get("source_kind") == "actual-process",
             f"{path}: replay/remote-only evidence is not a local live process")
@@ -70,6 +70,14 @@ def manifest(path: Path, wire: Path) -> dict[str, Any]:
             f"{path}: only explicit startup-no-prompt evidence is comparable")
     require(bool(HEX40.fullmatch(str(data.get("git_sha", "")))),
             f"{path}: exact source SHA missing")
+    if require_plugin:
+        plugin = data.get("plugin")
+        require(isinstance(plugin, dict) and
+                bool(HEX40.fullmatch(str(plugin.get("source_sha", "")))) and
+                bool(HEX64.fullmatch(str(plugin.get("artifact_sha256", "")))) and
+                plugin.get("location") == "local" and
+                plugin.get("hash_origin") == "measured-locally",
+                f"{path}: independent exact DSH plugin source/artifact required")
     require(nonempty(data.get("tern_version")) and
             bool(HEX64.fullmatch(str(data.get("tern_binary_sha256", "")))),
             f"{path}: exact Tern version and binary SHA256 required")
@@ -311,7 +319,7 @@ def surface(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
 
 
 def compare(args: argparse.Namespace) -> dict[str, Any]:
-    dsh_meta = manifest(args.dsh_manifest, args.dsh)
+    dsh_meta = manifest(args.dsh_manifest, args.dsh, require_plugin=True)
     peer_meta = manifest(args.peer_manifest, args.peer)
     require(dsh_meta["capture_id"] != peer_meta["capture_id"],
             "duplicate capture ID is not independent live evidence")
@@ -337,6 +345,7 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
         "tern_binary_sha256": dsh_meta["tern_binary_sha256"],
         "model_id": dsh_meta["model_id"],
         "git_sha": {"dsh": dsh_meta["git_sha"], "peer": peer_meta["git_sha"]},
+        "dsh_plugin": dsh_meta["plugin"],
         "startup": {"dsh": dsh, "peer": peer},
         "differences": differences,
         "pass": not differences,

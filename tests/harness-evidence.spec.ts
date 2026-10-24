@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 
-const harness = fileURLToPath(new URL('../../../../apps/cli/tests/profiles/tui/harness/', import.meta.url))
+const harness = fileURLToPath(new URL('./host/harness/', import.meta.url))
 const compareScript = join(harness, 'compare_wire.py')
 const sealScript = join(harness, 'evidence_bundle.py')
 const created: string[] = []
@@ -99,6 +99,8 @@ function captured(root: string, app: string, opts: { capture?: string } = {}): S
   const meta: Record<string, any> = {
     schema: 'dsh.tsp.evidence.2', mode: 'live', source_kind: 'actual-process',
     scope: 'startup-no-prompt', git_sha: GIT_SHA,
+    plugin: { source_sha: 'd'.repeat(40), artifact_sha256: 'e'.repeat(64),
+      location: 'local', hash_origin: 'measured-locally' },
     tern_version: 'Tern 0.9.5', tern_binary_sha256: TERN_SHA,
     model_id: 'tui-fixture/deterministic',
     workspace_start: { empty: true, prior_events: 0 },
@@ -127,6 +129,7 @@ interface Evidence {
   archive: string
   capture: Record<string, any>
   launcher: Record<string, any>
+  plugin: Record<string, any>
   update(): void
 }
 function evidence(parent: string): Evidence {
@@ -139,6 +142,7 @@ function evidence(parent: string): Evidence {
   safeDir(join(root, 'home'))
   safeDir(join(root, 'cache'))
   write(join(root, 'control/git-sha'), GIT_SHA + '\n')
+  write(join(root, 'plugin/plugin.tgz'), 'synthetic-standalone-package-bytes')
   write(join(root, 'control/tern-version'), 'Tern 0.9.5\n')
   write(join(root, 'control/tern-binary-sha256'), TERN_SHA + '\n')
   write(join(root, 'control/evidence-mode'), 'live\n')
@@ -159,13 +163,20 @@ function evidence(parent: string): Evidence {
     source_sha: GIT_SHA, artifact_sha256: CLI_SHA, location: 'local',
     hash_origin: 'measured-locally', provenance: 'SYNTHETIC UNIT DATA; not an executable attestation',
   }
+  const plugin = {
+    source_sha: 'd'.repeat(40),
+    artifact_sha256: H('synthetic-standalone-package-bytes'),
+    location: 'local', hash_origin: 'measured-locally',
+    provenance: 'SYNTHETIC plugin fixture; not a real packed consumer',
+  }
   const archive = join(parent, 'sealed.tar.gz')
   const update = (): void => {
     json(join(root, 'control/capture.json'), capture)
     json(join(root, 'control/launcher.json'), launcher)
+    json(join(root, 'control/plugin.json'), plugin)
   }
   update()
-  return { root, archive, capture, launcher, update }
+  return { root, archive, capture, launcher, plugin, update }
 }
 function seal(e: Evidence, extras: string[] = []): ReturnType<typeof python> {
   return python(sealScript, ['--evidence-dir', e.root, '--out', e.archive, ...extras])
@@ -453,6 +464,30 @@ describe('RFC #6 synthetic evidence seal safety (NOT native proof)', () => {
     expect(seal(a).status).toBe(2)
     rmSync(duplicate)
     expect(seal(a).status).toBe(0)
+  })
+
+  it('rejects a plugin artifact mismatch and malformed plugin source without conflating host evidence', () => {
+    const e = evidence(workspace())
+    e.plugin.artifact_sha256 = 'f'.repeat(64)
+    e.update()
+    expect(seal(e).status).toBe(2)
+    expect(existsSync(e.archive)).toBe(false)
+    e.plugin.artifact_sha256 = H('synthetic-standalone-package-bytes')
+    e.plugin.source_sha = 'not-a-commit'
+    e.update()
+    expect(seal(e).status).toBe(2)
+    e.plugin.source_sha = 'd'.repeat(40)
+    e.update()
+    expect(seal(e).status).toBe(0)
+    const saved = inspectArchive(e.archive)
+    expect(saved.manifest['git_sha']).toBe(GIT_SHA)
+    expect(saved.manifest['launcher']).toMatchObject({
+      source_sha: GIT_SHA, artifact_sha256: CLI_SHA,
+    })
+    expect(saved.manifest['plugin']).toMatchObject({
+      source_sha: 'd'.repeat(40),
+      artifact_sha256: H('synthetic-standalone-package-bytes'),
+    })
   })
 
   it('requires exact source/build metadata and allows retry after redaction failure', () => {
