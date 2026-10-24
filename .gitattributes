@@ -2,3 +2,5 @@
 patches/** -text
 # The vendored upstream notice is also checked against its exact Git blob.
 third_party/stencil-hq-tern-sdk/LICENSE -text
+# The separately labelled native test backend also verifies exact patch bytes.
+tests/windows/node-pty-passthrough.patch -text
