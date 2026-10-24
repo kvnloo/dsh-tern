@@ -1,0 +1,96 @@
+name: Fettl changed-code gate
+
+# Start this example when a draft becomes ready, or a ready PR is updated.
+# Creating the setup Draft PR does not run the workflow. No manual dispatch.
+on:
+  pull_request:
+    types: [ready_for_review, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  fettl:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      FETTL_VERSION: 0.19.78
+      FETTL_ARCHIVE_SHA256: b989a935f10418c9d2058a8009f11675dae17c5891e134037a0771feeb326d4d
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Check out event-pinned PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install checksum-pinned local scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/fettl-bin"
+          mkdir -p "$install_dir"
+          archive="$RUNNER_TEMP/fettl.tar.gz"
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            "https://downloads.fettl.dev/releases/v${FETTL_VERSION}/fettl-${FETTL_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            --output "$archive"
+          printf '%s  %s\n' "$FETTL_ARCHIVE_SHA256" "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$install_dir" fettl
+          chmod 0755 "$install_dir/fettl"
+
+      - name: Gate changed code without publishing source
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Never execute PR scripts, install project dependencies, or invoke fixes.
+          # The CLI is accountless/local: no Fettl Action/App, login, diagnostics,
+          # agent, supervisor, hosted assessment, or SARIF upload is used.
+          export HOME="$RUNNER_TEMP/fettl-home"
+          export XDG_CONFIG_HOME="$HOME/.config"
+          export XDG_CACHE_HOME="$HOME/.cache"
+          export XDG_DATA_HOME="$HOME/.local/share"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME"
+
+          # Fail closed on missing event commits/history; never fall back to full.
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git cat-file -e "${HEAD_SHA}^{commit}"
+          merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          test -n "$merge_base"
+
+          fettl="$RUNNER_TEMP/fettl-bin/fettl"
+          cache="$RUNNER_TEMP/fettl-store"
+          "$fettl" local-store init --root "$cache" \
+            > "$RUNNER_TEMP/fettl-init.log" 2>&1
+
+          # Gate the PR merge-base..head changed-code scope, not all historical
+          # findings. This is NOT fingerprint-based baseline/NewOnly policy:
+          # findings associated with modified code can still be pre-existing.
+          # All selected check violations block; do not trust JSON severity for
+          # filtering in 0.19.78 (critical-labelled messages can be 'medium').
+          # 0 = clean, 1 = violations, 2 = timeout, 3 = fatal/incomplete analysis.
+          # Preserve EVERY nonzero exit, including unexpected scanner failures.
+          # metadata_only omits source content; JSON and diagnostics remain
+          # ephemeral runner files, never logs/artifacts/SARIF/code-scanning.
+          set +e
+          "$fettl" check . \
+            --diff-source "branch:${merge_base}..${HEAD_SHA}" \
+            --privacy-mode metadata_only --format json \
+            --cache-dir "$cache" --timeout 180 \
+            > "$RUNNER_TEMP/fettl-metadata.json" \
+            2> "$RUNNER_TEMP/fettl-diagnostics.log"
+          status=$?
+          set -e
+          {
+            printf '## Fettl %s changed-code gate\n\n' "$FETTL_VERSION"
+            printf 'Comparison: `%s..%s` (event-pinned PR merge-base to head).\n\n' "$merge_base" "$HEAD_SHA"
+            printf 'Exit code: **%s** (0 clean; 1 findings; 2 timeout; 3 fatal/incomplete).\n\n' "$status"
+            printf 'Accountless local CLI; no fixes. No findings, source, snippets, diagnostics, or SARIF uploaded.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if (( status != 0 )); then
+            printf '::error::Fettl changed-code gate failed (exit %s); no source-bearing diagnostics published.\n' "$status"
+          fi
+          exit "$status"
