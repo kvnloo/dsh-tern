@@ -23,6 +23,10 @@ let ptyPackage
 const root = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const pluginName = '@kvnloo/dsh-tern'
 const expectedHost = '5badb15009ae1756c3afe0ae0cef1faafc290ccc'
+const backendMode = process.env.DSH_WINDOWS_CONPTY_BACKEND ?? 'inbox-conpty'
+requireGate(['inbox-conpty', 'bundled-conpty-passthrough'].includes(backendMode),
+  'unknown explicit ConPTY backend mode')
+const useConptyDll = backendMode === 'bundled-conpty-passthrough'
 const args = process.argv.slice(2)
 const options = new Map()
 for (let i = 0; i < args.length; i += 2) {
@@ -115,7 +119,24 @@ function backendCheck() {
     platform: process.platform, arch: process.arch,
     windowsBuild: build, node: process.version,
     nodePty: ptyPackage.version, nodeAddonApi: addon.version,
-    useConptyDll: false, backend: 'OS ConPTY via node-pty WindowsTerminal',
+    mode: backendMode, useConptyDll,
+    backend: useConptyDll ? 'bundled OpenConsole ConPTY passthrough via node-pty'
+      : 'inbox kernel32 OS ConPTY via node-pty WindowsTerminal',
+  }
+  if (useConptyDll) {
+    const dependency = dirname(require.resolve('node-pty/package.json'))
+    const source = readFileSync(join(dependency, 'src/win/conpty.cc'))
+    const sourceBlob = createHash('sha1').update(`blob ${source.length}\0`).update(source).digest('hex')
+    requireGate(sourceBlob === '81e9dc7d1e0fc9bf35301200064fe0715eb100c8',
+      'bundled passthrough must use the exact reviewed test-only native source')
+    const patchSha256 = sha256(join(root, 'tests/windows/node-pty-passthrough.patch'))
+    requireGate(patchSha256 === '68ef3401195af62392c04b61b8acbdbb84a39079c733fb0c5ba4d1ef6f1ec84c',
+      'test-only native passthrough patch bytes changed')
+    evidence.backend.nativeSourceBlob = sourceBlob
+    evidence.backend.nativePatchSha256 = patchSha256
+    evidence.backend.passthroughFlags = 8
+    evidence.backend.conptyAddonSha256 = sha256(join(dependency, 'build/Release/conpty.node'))
+    evidence.backend.conptyDllSha256 = sha256(join(dependency, 'build/Release/conpty/conpty.dll'))
   }
   // A source assertion alone is insufficient; the subsequent preflight and
   // real plugin cases must each observe actual ConPTY child input/output.
@@ -168,13 +189,18 @@ function spawnConsole(command, argv, sandbox) {
   const terminal = pty.spawn(command, argv, {
     name: 'xterm-256color', cols: 100, rows: 28,
     cwd: sandbox.workspace, env: isolatedEnv(sandbox),
-    useConpty: true, useConptyDll: false,
+    useConpty: true, useConptyDll,
   })
   // v1.1.0's published WindowsTerminal owns WindowsPtyAgent._useConpty.
   // Assert the *actual spawned* native backend, never mere platform claims.
   requireGate(terminal?._agent?._useConpty === true
-    && terminal._agent._useConptyDll === false,
+    && terminal._agent._useConptyDll === useConptyDll,
   'spawned Windows pseudoterminal was not OS ConPTY (WinPTY is forbidden)')
+  if (useConptyDll) {
+    const nativeAddon = join(dirname(require.resolve('node-pty/package.json')), 'build/Release/conpty.node')
+    requireGate(Object.keys(require.cache).some(path => resolve(path).toLowerCase() === resolve(nativeAddon).toLowerCase()),
+      'actual spawned ConPTY must load the rebuilt passthrough addon, never a prebuilt fallback')
+  }
   return terminal
 }
 

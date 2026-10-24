@@ -1,0 +1,6 @@
+diff --git a/src/win/conpty.cc b/src/win/conpty.cc
+--- a/src/win/conpty.cc
++++ b/src/win/conpty.cc
+@@ -292 +292 @@
+-  HRESULT hr = CreateNamedPipesAndPseudoConsole(info, {cols, rows}, inheritCursor ? 1/*PSEUDOCONSOLE_INHERIT_CURSOR*/ : 0, &hIn, &hOut, &hpc, inName, outName, pipeName, useConptyDll);
++  HRESULT hr = CreateNamedPipesAndPseudoConsole(info, {cols, rows}, (inheritCursor ? 1/*PSEUDOCONSOLE_INHERIT_CURSOR*/ : 0) | (useConptyDll ? 8/*PSEUDOCONSOLE_PASSTHROUGH_MODE*/ : 0), &hIn, &hOut, &hpc, inName, outName, pipeName, useConptyDll);

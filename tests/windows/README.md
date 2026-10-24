@@ -14,19 +14,33 @@ publishes packages nor launches external model providers.
 | Plugin | exact triggering `feat/windows-conpty` PR/push head; build and pack that checkout |
 | SDK | `@stencil-hq/tern@0.1.0`, original patched content with SHA-256 `c222b3495ade7f7b334ae4f5f94be05b2b4edb2764645dd1972f90ad436e0998` |
 | Runtime | Node 24.11.0; pnpm 11.7.0 |
-| Native test-only backend | `node-pty@1.1.0`, `node-addon-api@7.1.0`; separate `tests/windows/package.json` |
-| Windows | real `win32` on `windows-latest`, OS build >=18309; ConPTY native addon, `useConptyDll: false` |
+| Native test-only backend | `node-pty@1.1.0`, `node-addon-api@7.1.0`, rebuild tool `node-gyp@13.1.0`; separate `tests/windows/package.json` |
+| Windows | real `win32` on `windows-latest`, OS build >=18309; explicit inbox or bundled passthrough ConPTY mode |
 
-The published `node-pty@1.1.0` Windows backend contains **both**
-ConPTY and WinPTY implementations. This test expressly sets
-`useConpty: true` and `useConptyDll: false`, checks the pinned
-`WindowsPtyAgent` selector, and asserts that **each actual spawned instance**
-has `_useConpty === true` and `_useConptyDll === false`. Those private
-test-only assertions are deliberately tied to the pinned released code. A
-WinPTY launch fails the gate. The test also checks the native child
-`stdin.isTTY` / `stdout.isTTY`, but source inspection and TTY booleans
-alone are **not** ConPTY acceptance: real child output, OSC 877 semantic TSP
-frames, and physical Session logs must also pass.
+The published `node-pty@1.1.0` Windows backend contains both ConPTY and WinPTY.
+Every actual spawned instance must have `_useConpty === true`, and its
+`_useConptyDll` must match the explicitly selected backend. WinPTY fails.
+The default CI mode is separately labelled `bundled-conpty-passthrough`.
+It uses the real bundled OpenConsole `conpty.dll`, not kernel32 inbox ConPTY,
+and rebuilds the actual native addon with `PSEUDOCONSOLE_PASSTHROUGH_MODE` (8).
+The source-only test patch is hash-pinned, applies only when `useConptyDll=true`,
+and never modifies the production SDK. The gate verifies the actual loaded
+rebuilt addon and records its binary/DLL hashes. Child TTY booleans and source
+inspection alone are not acceptance. Real OSC877 frames and Session logs must pass.
+
+The primary inbox finding remains RED at exact559e4fd in
+[run40046872765](https://github.com/kvnloo/dsh-tern/actions/runs/40046872765):
+native query/hello/frame counts were zero, ANSI fallback was observed, and no
+plugin import failure occurred. This must not be relabelled as a bundled-mode pass.
+Use workflow-dispatch `conpty_backend=inbox-conpty` for an explicit inbox control.
+
+Upstream check: npm latest is1.1.0 and beta is1.2.0-beta.18. No open passthrough PR
+was returned. Current upstream3d2987da defines flag8 in `src/win/conpty.h` but
+`PtyStartProcess` still passes only inherit-cursor0/1, with no public flag option.
+The approved test-only patch changes immutable source blob
+`7b286d3d644c26141df516929703aa6e129df4b2` to
+`81e9dc7d1e0fc9bf35301200064fe0715eb100c8`.
+Patch SHA256: `68ef3401195af62392c04b61b8acbdbb84a39079c733fb0c5ba4d1ef6f1ec84c`.
 
 The exact SDK patch remains untouched until a real native RED is reproduced
 and reviewed. Do not replace the physical carrier with `PassThrough`,
@@ -81,8 +95,14 @@ if ($archive.Count -ne 1) { throw 'pack count RED' }
 
 npm install --prefix tests/windows --no-save --no-package-lock --no-audit --no-fund
 if ($LASTEXITCODE) { throw 'native backend install RED' }
-npm ls --prefix tests/windows --depth=0 node-pty node-addon-api
+npm ls --prefix tests/windows --depth=0 node-pty node-addon-api node-gyp
 if ($LASTEXITCODE) { throw 'backend versions RED' }
+
+$env:DSH_WINDOWS_CONPTY_BACKEND = 'bundled-conpty-passthrough'
+node tests/windows/prepare-bundled-conpty.mjs
+if ($LASTEXITCODE) { throw 'pinned native patch RED' }
+node tests/windows/node_modules/node-gyp/bin/node-gyp.js rebuild --directory tests/windows/node_modules/node-pty
+if ($LASTEXITCODE) { throw 'real native addon rebuild RED' }
 
 $env:DSH_WINDOWS_EXPECT_SHA = $expectedPlugin
 node tests/windows/run.mjs --host $host --archive $archive[0].FullName --out $receipt

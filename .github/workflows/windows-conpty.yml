@@ -8,15 +8,23 @@ on:
     branches:
       - feat/standalone-plugin
   workflow_dispatch:
+    inputs:
+      conpty_backend:
+        description: Explicit native backend (inbox findings remain separate)
+        type: choice
+        options: [inbox-conpty, bundled-conpty-passthrough]
+        default: bundled-conpty-passthrough
 
 permissions:
   contents: read
 
 jobs:
   windows-native-conpty:
-    name: Exact-head packed host/plugin through OS ConPTY
+    name: Exact-head ConPTY (${{ inputs.conpty_backend || 'bundled-conpty-passthrough' }})
     runs-on: windows-latest
     timeout-minutes: 90
+    env:
+      DSH_WINDOWS_CONPTY_BACKEND: ${{ inputs.conpty_backend || 'bundled-conpty-passthrough' }}
     defaults:
       run:
         shell: pwsh
@@ -100,7 +108,15 @@ jobs:
         run: |
           npm install --prefix tests/windows --no-save --no-package-lock --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm ls --prefix tests/windows --depth=0 node-pty node-addon-api
+          npm ls --prefix tests/windows --depth=0 node-pty node-addon-api node-gyp
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Rebuild hash-pinned bundled-conpty-passthrough native backend
+        if: env.DSH_WINDOWS_CONPTY_BACKEND == 'bundled-conpty-passthrough'
+        run: |
+          node tests/windows/prepare-bundled-conpty.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/windows/node_modules/node-gyp/bin/node-gyp.js rebuild --directory tests/windows/node_modules/node-pty
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Real OS ConPTY / packed host / Session / OSC877 gate
