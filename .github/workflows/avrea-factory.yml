@@ -32,6 +32,13 @@ jobs:
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
         fetch-depth: 0
         persist-credentials: false
+    - name: Preserve canonical tracked plugin bytes on Windows
+      # Both providers must hash the published Git blobs, not CRLF checkout conversions.
+      run: |
+        git config --local core.autocrlf false
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        git checkout-index --force --all
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     - name: Checkout unmodified pinned DSH host (read only)
       uses: actions/checkout@v4
       with:
