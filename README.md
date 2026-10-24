@@ -57,6 +57,8 @@ The public PTY runners use the host's **actual** CLI/Loader/Agent/Session in **s
 
 The packed consumer gate checks built-to-packed bytes, installs in a fresh npm consumer and compares the embedded patched SDK against **public unpatched registry 0.1.0** as a required negative control. Set `REGISTRY_TERN_TARBALL` only to an independently obtained raw 0.1.0 tarball when offline.
 
+The public gate runner uses private HOME/XDG/DSH directories and a small environment allowlist; it sets `CI=true` explicitly for noninteractive pnpm execution without forwarding credentials or arbitrary host configuration. SDK patch files are marked `-text` in `.gitattributes` so Windows checkout conversion cannot change their verified bytes.
+
 ## SDK, provenance and license
 
 - `@stencil-hq/tern@0.1.0` is pinned **exactly**. The checked-in pnpm patch `patches/@stencil-hq__tern@0.1.0.patch` has qualified SHA256 `c222b3495ade7f7b334ae4f5f94be05b2b4edb2764645dd1972f90ad436e0998`. The production build inlines the **patched** SDK, so consumers cannot silently resolve an unpatched copy. Changing that patch requires a new real witness.

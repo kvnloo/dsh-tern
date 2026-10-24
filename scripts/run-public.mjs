@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveExampleLaunch } from '@deepseek-ai/dsh-loader-smoke'
+import { publicEnvironment } from './public-environment.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const mode = process.argv[2]
@@ -27,17 +28,7 @@ const packages = join(privateRoot, 'packages')
 for (const name of ['home', 'config', 'cache', 'agents', 'dsh', 'packages']) {
   mkdirSync(join(privateRoot, name), { mode: 0o700 })
 }
-const environment = {
-  ...Object.fromEntries(['PATH', 'LANG', 'LC_ALL', 'SHELL', 'USER', 'TMPDIR', 'TZ']
-    .flatMap(key => process.env[key] ? [[key, process.env[key]]] : [])),
-  HOME: join(privateRoot, 'home'),
-  XDG_CONFIG_HOME: join(privateRoot, 'config'),
-  XDG_CACHE_HOME: join(privateRoot, 'cache'),
-  DSH_HOME: profileHome,
-  DSH_AGENTS_HOME: join(privateRoot, 'agents'),
-  DSH_TELEMETRY_DISABLED: '1',
-  TERM: 'xterm-256color',
-}
+const environment = publicEnvironment(privateRoot)
 const run = (program, args, cwd, env = environment) => execFileSync(program, args, {
   cwd, env, stdio: 'inherit', timeout: args.includes('vitest') ? 1_800_000 : 600_000,
 })
