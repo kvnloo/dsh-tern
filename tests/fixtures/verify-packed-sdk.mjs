@@ -62,8 +62,18 @@ try {
   }
   const consumer = join(temp, 'npm-consumer')
   mkdirSync(consumer)
-  writeFileSync(join(consumer, 'package.json'),
-    JSON.stringify({ name: 'dsh-tern-consumer', private: true, type: 'module' }))
+  // A plugin consumer supplies the pinned host peers. In particular, npm's
+  // automatic optional-peer selection otherwise chooses stable include1.0.10,
+  // which requires stable loader1.0.6 instead of this host's alpha loader.
+  // Resolve the real published host graph explicitly, never --force or
+  // --legacy-peer-deps, and still import both public exports below.
+  writeFileSync(join(consumer, 'package.json'), JSON.stringify({
+    name: 'dsh-tern-consumer', private: true, type: 'module',
+    dependencies: {
+      ...config.peerDependencies,
+      '@deepseek-ai/cordis-plugin-include': config.devDependencies['@deepseek-ai/cordis-plugin-include'],
+    },
+  }))
   run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund',
     join(localDir, localArchives[0])], consumer)
   const installed = JSON.parse(readFileSync(
