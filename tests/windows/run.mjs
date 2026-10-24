@@ -143,7 +143,7 @@ function isolatedEnv(sandbox) {
     'NUMBER_OF_PROCESSORS',
   ]
   const env = Object.fromEntries(preserve.flatMap(name =>
-    process.env[name] === undefined ? [] : [[name, process.env[name]]))
+    process.env[name] === undefined ? [] : [[name, process.env[name]]]))
   return {
     ...env,
     HOME: join(sandbox.dir, 'home'),
