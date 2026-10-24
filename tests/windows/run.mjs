@@ -137,6 +137,11 @@ function backendCheck() {
     evidence.backend.passthroughFlags = 8
     evidence.backend.conptyAddonSha256 = sha256(join(dependency, 'build/Release/conpty.node'))
     evidence.backend.conptyDllSha256 = sha256(join(dependency, 'build/Release/conpty/conpty.dll'))
+    evidence.backend.openConsoleSha256 = sha256(join(dependency, 'build/Release/conpty/OpenConsole.exe'))
+    requireGate(evidence.backend.conptyDllSha256 === '7c7430632052ff703540b68371ec43821820aa1335d8e11dfbcd9ff00e9daaed',
+      'loaded bundled conpty.dll must match official node-pty 1.1.0 x64 package')
+    requireGate(evidence.backend.openConsoleSha256 === 'd1fe7faa62f9e955e2ac2371f95d7e5513df4d496255097158f979c94782c5fc',
+      'bundled OpenConsole.exe must match official node-pty 1.1.0 x64 package')
   }
   // A source assertion alone is insufficient; the subsequent preflight and
   // real plugin cases must each observe actual ConPTY child input/output.

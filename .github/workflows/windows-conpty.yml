@@ -118,6 +118,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/windows/node_modules/node-gyp/bin/node-gyp.js rebuild --directory tests/windows/node_modules/node-pty
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/windows/stage-bundled-conpty.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Real OS ConPTY / packed host / Session / OSC877 gate
         env:

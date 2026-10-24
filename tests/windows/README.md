@@ -27,6 +27,14 @@ The source-only test patch is hash-pinned, applies only when `useConptyDll=true`
 and never modifies the production SDK. The gate verifies the actual loaded
 rebuilt addon and records its binary/DLL hashes. Child TTY booleans and source
 inspection alone are not acceptance. Real OSC877 frames and Session logs must pass.
+After rebuild, `stage-bundled-conpty.mjs` restores the two files that upstream
+`scripts/post-install.js` normally copies (node-gyp itself does not copy them).
+It uses only `third_party/conpty/1.23.251008001/win10-x64/` from the official
+`https://registry.npmjs.org/node-pty/-/node-pty-1.1.0.tgz` package, checks both
+source and destination SHA256 values, and stages `build/Release/conpty/`:
+`conpty.dll` = `7c7430632052ff703540b68371ec43821820aa1335d8e11dfbcd9ff00e9daaed`;
+`OpenConsole.exe` = `d1fe7faa62f9e955e2ac2371f95d7e5513df4d496255097158f979c94782c5fc`.
+The transport gate independently checks and records both staged hashes.
 
 The primary inbox finding remains RED at exact559e4fd in
 [run40046872765](https://github.com/kvnloo/dsh-tern/actions/runs/40046872765):
@@ -103,6 +111,8 @@ node tests/windows/prepare-bundled-conpty.mjs
 if ($LASTEXITCODE) { throw 'pinned native patch RED' }
 node tests/windows/node_modules/node-gyp/bin/node-gyp.js rebuild --directory tests/windows/node_modules/node-pty
 if ($LASTEXITCODE) { throw 'real native addon rebuild RED' }
+node tests/windows/stage-bundled-conpty.mjs
+if ($LASTEXITCODE) { throw 'official bundled binary staging RED' }
 
 $env:DSH_WINDOWS_EXPECT_SHA = $expectedPlugin
 node tests/windows/run.mjs --host $host --archive $archive[0].FullName --out $receipt
