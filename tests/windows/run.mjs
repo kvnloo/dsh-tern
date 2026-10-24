@@ -260,6 +260,93 @@ async function preflight() {
   } finally { await peer.dispose() }
 }
 
+async function inputCarrierProbe() {
+  const sandbox = privateWorkspace('raw-input-probe')
+  const hello = '{"r":"hello","v":1,"term":"tern"}'
+  const samples = [
+    { name: 'da1', parts: ['\x1b[?1;2c'] },
+    { name: 'apc-hello', parts: ['\x1b_tsp;r;' + hello + '\x1b\\'] },
+    { name: 'split-apc-hello', parts: ['\x1b_tsp;r;' + hello.slice(0, 20), hello.slice(20) + '\x1b\\'] },
+    { name: 'osc877-hello', parts: ['\x1b]877;tsp;r;' + hello + '\x1b\\'] },
+    { name: 'split-osc877-hello', parts: ['\x1b]877;tsp;r;' + hello.slice(0, 9), hello.slice(9) + '\x1b\\'] },
+    { name: 'malformed-osc877', parts: ['\x1b]877;tsp;e;{broken-json}\x1b\\'] },
+    { name: 'foreign-tsp-apc', parts: ['\x1b_tsp;r;{"r":"hello","v":1,"term":"foreign"}\x1b\\'] },
+    { name: 'unicode-and-quit', parts: ['preé-mid🌱post\r/quit\r'] },
+  ]
+  const marker = '::DSH_RAW_INPUT_SAMPLE_END::'
+  // Observe the OS console's bytes before any SDK, fence or readline parser.
+  // This child is diagnostic only; it cannot satisfy the real DSH assertions.
+  const script = String.raw`
+    const { createHash } = require('node:crypto');
+    const samples = JSON.parse(process.argv[1]);
+    const marker = Buffer.from(process.argv[2]);
+    const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+    let pending = Buffer.alloc(0), index = 0;
+    process.stdin.setRawMode(true);
+    process.stdin.on('data', chunk => {
+      pending = Buffer.concat([pending, chunk]);
+      for (;;) {
+        const end = pending.indexOf(marker);
+        if (end < 0) return;
+        const actual = pending.subarray(0, end);
+        pending = pending.subarray(end + marker.length);
+        const expected = Buffer.from(samples[index].parts.join(''));
+        const text = actual.toString('utf8');
+        const intended = expected.toString('utf8');
+        const report = {
+          name: samples[index].name,
+          exactBytes: actual.equals(expected),
+          expectedBytes: expected.length, receivedBytes: actual.length,
+          expectedSha256: digest(expected), receivedSha256: digest(actual),
+          expectedEscapes: [...expected].filter(b => b === 27).length,
+          receivedEscapes: [...actual].filter(b => b === 27).length,
+          matchesWithoutEscapes: text === intended.replaceAll('\x1b', ''),
+          apcPrefixPreserved: text.includes('\x1b_tsp;'),
+          osc877PrefixPreserved: text.includes('\x1b]877;tsp;'),
+          stPreserved: text.includes('\x1b\\'),
+          receivedCarriageReturns: [...actual].filter(b => b === 13).length,
+          receivedLineFeeds: [...actual].filter(b => b === 10).length,
+        };
+        process.stdout.write('CONPTY_RAW_' + index + '=' + JSON.stringify(report) + '\n');
+        if (++index === samples.length) {
+          process.stdin.setRawMode(false);
+          process.stdin.pause();
+          return;
+        }
+      }
+    });
+    process.stdout.write('CONPTY_RAW_READY\n');
+  `
+  const child = spawnConsole(process.execPath,
+    ['-e', script, JSON.stringify(samples), marker], sandbox)
+  const peer = new ConptyPeer(child, 'fallback')
+  const observed = []
+  evidence.rawInputDiagnostic = { diagnosticOnly: true, samples: observed }
+  try {
+    await peer.waitFor(() => peer.output.includes('CONPTY_RAW_READY'),
+      'raw ConPTY input diagnostic ready', 20_000)
+    for (const [index, sample] of samples.entries()) {
+      for (const [partIndex, part] of sample.parts.entries()) {
+        if (partIndex > 0) await new Promise(resolve => setTimeout(resolve, 65))
+        peer.write(part)
+      }
+      peer.write(marker)
+      const prefix = 'CONPTY_RAW_' + index + '='
+      await peer.waitFor(() => peer.output.includes(prefix)
+        && peer.output.indexOf('\n', peer.output.indexOf(prefix)) >= 0,
+      'raw ConPTY input diagnostic sample ' + sample.name, 20_000)
+      const start = peer.output.indexOf(prefix) + prefix.length
+      const end = peer.output.indexOf('\n', start)
+      const report = JSON.parse(peer.output.slice(start, end).trim())
+      requireGate(report.name === sample.name, 'raw ConPTY diagnostic sample order changed')
+      observed.push(report)
+    }
+    await peer.waitForExit(20_000)
+    requireGate(peer.exit.code === 0, 'raw ConPTY input diagnostic exit not zero')
+    return { diagnosticOnly: true, exitCode: peer.exit.code, samples: observed }
+  } finally { await peer.dispose() }
+}
+
 function userContent(blocks) {
   if (!Array.isArray(blocks)) return ''
   return blocks.filter(block => block?.type === 'text' && typeof block.text === 'string')
@@ -504,7 +591,25 @@ async function fallbackMalicious(sandbox) {
       durableUserCount: 1, durableAssistantCount: 1,
       maliciousCarriers: 5, transport: peer.stats(),
     }
-  } finally { await peer.dispose() }
+  } catch (error) {
+    evidence.fallbackDiagnosis = {
+      primaryFailure: safeFailure(error),
+      anyAgentReplyVisible: peer.output.includes('[dsh] echo: '),
+      exactAgentReplyVisible: peer.output.includes('[dsh] echo: preé-mid🌱post'),
+      quitEchoVisible: peer.output.includes('/quit'),
+      replyContainsProtocolText: /\[dsh\] echo: [^\r\n]*(?:tsp;|broken-json|"term")/.test(peer.output),
+      promptCount: peer.output.split('dsh> ').length - 1,
+      transport: peer.stats(),
+    }
+    throw error
+  } finally {
+    try { await peer.dispose() }
+    catch (error) {
+      if (!evidence.fallbackDiagnosis) throw error
+      // Preserve the original RED and report any independent cleanup failure.
+      evidence.fallbackDiagnosis.cleanupFailure = safeFailure(error)
+    }
+  }
 }
 
 async function disabledNative(sandbox) {
@@ -567,6 +672,7 @@ function safeFailure(error) {
 try {
   await step('inputs-and-native-backend', backendCheck)
   await step('os-conpty-tty-preflight', preflight)
+  await step('os-conpty-raw-input-carrier-diagnostic', inputCarrierProbe)
   const main = privateWorkspace('native')
   await step('packed-real-plugin-manager-native-profile', () => {
     installPlugin(main)

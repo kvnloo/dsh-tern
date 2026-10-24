@@ -172,7 +172,7 @@ The mandatory gate checks, in order:
 8. DA1-first ANSI fallback fences malformed/foreign/late TSP APC and OSC 877
    input from becoming a user request; precise persisted intent and response.
 
-These are eleven enforced phase records, covering seven actual ConPTY child
+These are twelve enforced phase records, covering eight actual ConPTY child
 launches and four independently installed private profiles if all phases run.
 A failure stops the sequence, marks the actual RED phase, returns nonzero and
 must never be relabeled a green partial check. Existing Linux test assertions
@@ -201,6 +201,13 @@ the pinned backend. The isolated shutdown regression checks both paths.
 The real-child preflight also reports whether OS ConPTY preserves a known APC
 output carrier. This is a transport diagnosis, not a substitute for the
 following actual DSH OSC877/native surface phase.
+An additional raw-input child samples DA1, whole/split APC and OSC877, malformed
+and foreign TSP carriers, and ordinary Unicode/quit input before any SDK or
+readline parser. Samples are delimited and acknowledged individually; only
+byte counts, hashes and known-input comparison booleans are retained.
+This diagnostic cannot satisfy or bypass the mandatory real DSH fencing case.
+Fencing failures retain primary and cleanup errors separately, plus known-output
+booleans and transport counters, so a cleanup timeout cannot hide the original RED.
 
 A test-suite exit code of zero and the exact-head Actions job conclusion of
 `success` are **both required** to claim a green Windows native gate.
