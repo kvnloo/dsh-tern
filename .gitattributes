@@ -1,2 +1,4 @@
 # SDK patch integrity is checked by SHA-256; never convert its line endings.
 patches/** -text
+# The vendored upstream notice is also checked against its exact Git blob.
+third_party/stencil-hq-tern-sdk/LICENSE -text

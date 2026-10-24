@@ -5,15 +5,17 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { publicEnvironment } from '../../scripts/public-environment.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const temp = mkdtempSync(join(tmpdir(), 'dsh-tui-packed-'))
-const run = (tool, args, cwd = root) =>
-  execFileSync(tool, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+const run = (tool, args, cwd = root, env = process.env) =>
+  execFileSync(tool, args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 const unpack = (tarball, folder) => {
   mkdirSync(folder, { recursive: true })
   run('tar', ['-xzf', tarball, '-C', folder])
@@ -29,9 +31,14 @@ try {
   const localArchives = readdirSync(localDir).filter(name => name.endsWith('.tgz'))
   assert.equal(localArchives.length, 1, 'one packed tui-app tarball')
   const packed = unpack(join(localDir, localArchives[0]), join(temp, 'packed'))
+  for (const entry of ['index', 'startup']) {
+    assert.equal(readFileSync(join(packed, 'lib', entry + '.js'), 'utf8'),
+      readFileSync(join(root, 'lib', entry + '.js'), 'utf8'),
+      'both packed runtime exports must be present and byte-identical to the final bundles')
+  }
+  assert.deepEqual(readdirSync(join(packed, 'lib/types')).filter(name => name.endsWith('.js')), [],
+    'unbundled compiler intermediates must not ship beside the qualified SDK bundle')
   const lib = readFileSync(join(packed, 'lib/index.js'), 'utf8')
-  assert.equal(lib, readFileSync(join(root, 'lib/index.js'), 'utf8'),
-    'packed production library must be byte-identical to the built native runtime')
   const sdkNotice = readFileSync(join(packed, 'licenses/tern-LICENSE'), 'utf8')
   assert.match(sdkNotice, /MIT License/i, 'SDK original MIT notice must ship in the tarball')
   assert.match(sdkNotice, /permission is hereby granted/i)
@@ -50,6 +57,9 @@ try {
   // Recreate the original RED witness as a real npm consumer, now expected
   // GREEN. This install cannot rely on the source checkout's pnpm patch map,
   // monorepo workspaces, or a fake profile loader.
+  for (const name of ['home', 'config', 'cache', 'dsh', 'agents']) {
+    mkdirSync(join(temp, name))
+  }
   const consumer = join(temp, 'npm-consumer')
   mkdirSync(consumer)
   writeFileSync(join(consumer, 'package.json'),
@@ -61,9 +71,21 @@ try {
   assert.equal(installed.name, '@kvnloo/dsh-tern')
   assert.equal(installed.dsh?.bundle?.patch, './cordis.patch.yml')
   assert.deepEqual(installed.exports['.'], config.exports['.'])
+  assert.deepEqual(installed.exports['./startup'], config.exports['./startup'])
   assert.equal(readFileSync(
     join(consumer, 'node_modules/@kvnloo/dsh-tern/lib/index.js'), 'utf8'), lib,
     'clean npm consumer must load identical patched production runtime bytes')
+  // Import by the same public specifiers used by Cordis, in a fresh process
+  // outside the checkout. Reading bytes alone cannot exercise exports or peers.
+  run(process.execPath, ['--input-type=module', '--eval', [
+    "import assert from 'node:assert/strict'",
+    "const startup = await import('@kvnloo/dsh-tern/startup')",
+    "const app = await import('@kvnloo/dsh-tern')",
+    "assert.equal(startup.name, 'tui-startup')",
+    "assert.equal(app.name, 'tui-app')",
+    "assert.equal(typeof startup.apply, 'function')",
+    "assert.equal(typeof app.apply, 'function')",
+  ].join('\n')], consumer, publicEnvironment(temp))
 
   const supplied = process.env.REGISTRY_TERN_TARBALL
   if (!supplied) {
@@ -82,6 +104,25 @@ try {
   const wire = readFileSync(join(raw, 'dist/wire.js'), 'utf8')
   assert.doesNotMatch(wire, /num\(raw,\s*['"]v['"]\)\s*!==\s*PROTOCOL_VERSION/,
     'negative control must lack the workspace hello guard')
+  // CI retains the exact already-tested archive, never a separate repack.
+  // The receipt certifies this packed consumer gate, not native acceptance.
+  if (process.env.DSH_TUI_PACKED_ARTIFACT_DIR) {
+    const destination = resolve(process.env.DSH_TUI_PACKED_ARTIFACT_DIR)
+    mkdirSync(destination, { recursive: true })
+    const archive = localArchives[0]
+    const tarball = join(localDir, archive)
+    copyFileSync(tarball, join(destination, archive))
+    writeFileSync(join(destination, 'packed-consumer-receipt.json'), JSON.stringify({
+      schema_version: 1,
+      plugin_commit: run('git', ['rev-parse', 'HEAD']).trim(),
+      package_name: config.name,
+      tarball: archive,
+      tarball_sha256: createHash('sha256').update(readFileSync(tarball)).digest('hex'),
+      gate: 'test:packed',
+      imports: ['@kvnloo/dsh-tern/startup', '@kvnloo/dsh-tern'],
+      registry_negative_control: '@stencil-hq/tern@0.1.0',
+    }, null, 2) + '\n')
+  }
   process.stdout.write('Packed TUI embeds the patched SDK; unpatched registry 0.1.0 is a negative control.\n')
 } finally {
   rmSync(temp, { recursive: true, force: true })

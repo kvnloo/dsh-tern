@@ -6,6 +6,8 @@ export default defineConfig({
   entry: ['lib/types/index.js', 'lib/types/startup.js'],
   outDir: 'lib',
   format: ['esm'],
+  // Node builds default to .mjs; the public exports and pack allowlist use .js.
+  outExtensions: () => ({ js: '.js' }),
   platform: 'node',
   target: 'es2024',
   splitting: false,
