@@ -1,10 +1,10 @@
 name: Fettl changed-code gate
 
-# Start this example when a draft becomes ready, or a ready PR is updated.
-# Creating the setup Draft PR does not run the workflow. No manual dispatch.
+# Check opened ready PRs, drafts marked ready, and later updates/reopens.
+# Draft PR events skip the scanner job. No manual dispatch.
 on:
   pull_request:
-    types: [ready_for_review, synchronize, reopened]
+    types: [opened, ready_for_review, synchronize, reopened]
 
 permissions:
   contents: read
