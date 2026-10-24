@@ -392,28 +392,29 @@ async function nativeOne(sandbox) {
       'real Agent final reply after tool execution', before, 60_000)
     await waitNode(peer, { id: 'dock.status.label', contains: ' · idle' },
       'tool Agent turn settled', before, 60_000)
-    await peer.waitFor(() => durable(sandbox).events
-      .filter(event => event.type === 'turn/end').length === 3,
-    'three real Agent turns durably completed', 60_000)
-    const beforeQuit = durable(sandbox)
-    assertExact(beforeQuit.users, ['xyz😀\nsecond line', 'atomic\nsend', '[tool]'], 'native send-once')
-    assertExact(beforeQuit.assistants, [
+    // Session events are queued by the pinned JSONL backend. Confirm native
+    // close and process exit (the persistence drain) before reading disk,
+    // matching the public-service/Linux tests rather than sampling live writes.
+    const liveNodes = new Map(peer.nodes)
+    await finishNative(peer)
+    const saved = durable(sandbox)
+    assertExact(saved.users, ['xyz😀\nsecond line', 'atomic\nsend', '[tool]'], 'native send-once')
+    assertExact(saved.assistants, [
       'echo: xyz😀\nsecond line', 'echo: atomic\nsend', 'tool settled',
     ], 'real Agent replies')
-    const callId = assertTool(beforeQuit)
+    const callId = assertTool(saved)
     const toolId = 'main.tool.' + callId
-    requireGate(peer.nodes.get(toolId)?.p?.role === 'dsh.tool',
+    requireGate(liveNodes.get(toolId)?.p?.role === 'dsh.tool',
       'real native semantic tool card role missing')
-    requireGate(peer.nodes.get(toolId + '.body')?.p?.text
+    requireGate(liveNodes.get(toolId + '.body')?.p?.text
       === 'Tool result: DSH_TUI_FIXTURE_OK',
     'real native tool result card did not settle')
     const additions = peer.frames.flatMap(frame => frame.ops)
       .filter(op => Array.isArray(op) && op[0] === 'add' && op[4]?.id === toolId)
     requireGate(additions.length === 1, 'tool card was re-added instead of reconciled once')
-    await finishNative(peer)
     return {
-      sessionId: beforeQuit.id, durableUserCount: beforeQuit.users.length,
-      durableAssistantCount: beforeQuit.assistants.length,
+      sessionId: saved.id, durableUserCount: saved.users.length,
+      durableAssistantCount: saved.assistants.length,
       durableToolResults: 1, transport: peer.stats(),
     }
   } finally { await peer.dispose() }
@@ -439,6 +440,7 @@ async function nativeResume(sandbox, sessionId) {
       'Agent reply after recovered native surface', before)
     await waitNode(peer, { id: 'dock.status.label', contains: ' · idle' },
       'resumed Agent turn settled', before)
+    await finishNative(peer)
     const saved = durable(sandbox)
     requireGate(saved.id === sessionId, 'real persisted Session ID changed across process restart')
     assertExact(saved.users, ['xyz😀\nsecond line', 'atomic\nsend', '[tool]', 'after-resume'],
@@ -446,7 +448,6 @@ async function nativeResume(sandbox, sessionId) {
     assertExact(saved.assistants, [
       'echo: xyz😀\nsecond line', 'echo: atomic\nsend', 'tool settled', 'echo: after-resume',
     ], 'native durable assistant replay')
-    await finishNative(peer)
     return {
       resumedSameSession: true, durableUserCount: saved.users.length,
       durableAssistantCount: saved.assistants.length, transport: peer.stats(),
