@@ -287,6 +287,21 @@ function durable(sandbox) {
 }
 
 function assertExact(values, expected, phaseLabel) {
+  if (JSON.stringify(values) !== JSON.stringify(expected)) {
+    // Only structural counters and hashes escape; never persist Session text.
+    const digest = text => createHash('sha256').update(text).digest('hex')
+    evidence.sessionMismatch = {
+      phaseLabel, actualCount: values.length, expectedCount: expected.length,
+      actual: values.map((text, index) => ({
+        utf8Bytes: Buffer.byteLength(text), sha256: digest(text),
+        exactExpectedIndex: expected.indexOf(text),
+        expectedPrefix: typeof expected[index] === 'string' && expected[index].startsWith(text),
+        crlfOnlyDifference: typeof expected[index] === 'string'
+          && text.replaceAll('\r\n', '\n') === expected[index],
+      })),
+      expected: expected.map(text => ({ utf8Bytes: Buffer.byteLength(text), sha256: digest(text) })),
+    }
+  }
   requireGate(JSON.stringify(values) === JSON.stringify(expected), phaseLabel + ': physical Session exact content mismatch')
 }
 
@@ -371,8 +386,15 @@ async function nativeOne(sandbox) {
     })
     await waitNode(peer, { contains: 'Tool result: DSH_TUI_FIXTURE_OK' },
       'real ToolService execution and stable native card', before, 60_000)
+    // Tool completion is not the Agent's final text reply. Like the public
+    // service gate, observe that reply before reading the physical Session.
+    await waitNode(peer, { contains: 'tool settled' },
+      'real Agent final reply after tool execution', before, 60_000)
     await waitNode(peer, { id: 'dock.status.label', contains: ' · idle' },
       'tool Agent turn settled', before, 60_000)
+    await peer.waitFor(() => durable(sandbox).events
+      .filter(event => event.type === 'turn/end').length === 3,
+    'three real Agent turns durably completed', 60_000)
     const beforeQuit = durable(sandbox)
     assertExact(beforeQuit.users, ['xyz😀\nsecond line', 'atomic\nsend', '[tool]'], 'native send-once')
     assertExact(beforeQuit.assistants, [
