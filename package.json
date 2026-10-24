@@ -20,7 +20,6 @@
   },
   "files": [
     "lib/*.js",
-    "lib/**/*.js",
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
     "LICENSE",
