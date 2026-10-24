@@ -147,9 +147,13 @@ synthetic summary survives.
 
 Negotiation failures retain only the existing synthetic transport counters and
 booleans for known ANSI fallback/import-failure labels, never raw child output.
-Teardown waits for the ConPTY child exit before releasing subscriptions and
-removing its workspace. The isolated shutdown regression checks this ordering,
-but is not native transport acceptance.
+Teardown waits for the ConPTY child exit, then closes its pinned node-pty1.1.0
+conout worker and input/output sockets before releasing subscriptions and
+removing its workspace. A natural child exit does not dispose that worker in
+the pinned backend. The isolated shutdown regression checks both paths.
+The real-child preflight also reports whether OS ConPTY preserves a known APC
+output carrier. This is a transport diagnosis, not a substitute for the
+following actual DSH OSC877/native surface phase.
 
 A test-suite exit code of zero and the exact-head Actions job conclusion of
 `success` are **both required** to claim a green Windows native gate.

@@ -208,9 +208,11 @@ function installPlugin(sandbox) {
 
 async function preflight() {
   const sandbox = privateWorkspace('preflight')
+  const carrier = '\x1b_tsp;probe;{}\x1b\\'
   const child = spawnConsole(process.execPath, [
     '-e',
-    'process.stdout.write("CONPTY_TTY=" + JSON.stringify({ p: process.platform, i: !!process.stdin.isTTY, o: !!process.stdout.isTTY }) + "\\n")',
+    'process.stdout.write("CONPTY_TTY=" + JSON.stringify({ p: process.platform, i: !!process.stdin.isTTY, o: !!process.stdout.isTTY }) + "\\n" + process.argv[1] + "\\nCONPTY_PROBE_END\\n")',
+    carrier,
   ], sandbox)
   const peer = new ConptyPeer(child, 'fallback')
   try {
@@ -218,7 +220,12 @@ async function preflight() {
     requireGate(peer.exit.code === 0, 'native ConPTY preflight process failed')
     requireGate(peer.output.includes('CONPTY_TTY={"p":"win32","i":true,"o":true}'),
       'OS ConPTY did not attach real child stdin and stdout TTY')
-    return { exitCode: peer.exit.code, childTtyInput: true, childTtyOutput: true }
+    requireGate(peer.output.includes('CONPTY_PROBE_END'), 'ConPTY preflight did not finish its actual output')
+    return {
+      exitCode: peer.exit.code, childTtyInput: true, childTtyOutput: true,
+      // Diagnostic only. The following real DSH native phase must still pass.
+      childApcOutputPreserved: peer.output.includes(carrier),
+    }
   } finally { await peer.dispose() }
 }
 

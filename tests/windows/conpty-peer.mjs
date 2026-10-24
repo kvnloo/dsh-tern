@@ -307,6 +307,17 @@ export class ConptyPeer {
         // subscription alive until shutdown completes before removing files.
         await this.waitForExit(20_000)
       }
+      // node-pty1.1.0 closes only outSocket on natural OS-ConPTY exit.
+      // Its conout worker and input socket still keep this test process alive.
+      // These are owned handles on the already asserted pinned backend.
+      const agent = this.pty._agent
+      requireGate(typeof agent?._conoutSocketWorker?.dispose === 'function'
+        && typeof agent?.inSocket?.destroy === 'function'
+        && typeof agent?.outSocket?.destroy === 'function',
+      'pinned node-pty ConPTY cleanup handles changed')
+      agent._conoutSocketWorker.dispose()
+      agent.inSocket.destroy()
+      agent.outSocket.destroy()
     } finally {
       this.dataSubscription.dispose()
       this.exitSubscription.dispose()
