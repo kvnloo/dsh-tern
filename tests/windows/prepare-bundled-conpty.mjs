@@ -20,7 +20,10 @@ assert.equal(JSON.parse(readFileSync(join(dependency, 'package.json'), 'utf8')).
 assert.equal(createHash('sha256').update(readFileSync(patch)).digest('hex'),
   '68ef3401195af62392c04b61b8acbdbb84a39079c733fb0c5ba4d1ef6f1ec84c')
 assert.equal(blobHash(readFileSync(source)), originalBlob, 'installed native source must match the immutable upstream Git blob')
-execFileSync('git', ['apply', '--unsafe-paths', '--unidiff-zero', '--directory', dependency.replaceAll('\\', '/'), patch], {
+// Git for Windows otherwise rewrites the entire patched source as CRLF.
+// Keep the qualified source bytes LF without changing runner/repo settings.
+execFileSync('git', ['-c', 'core.autocrlf=false', '-c', 'core.eol=lf',
+  'apply', '--unsafe-paths', '--unidiff-zero', '--directory', dependency.replaceAll('\\', '/'), patch], {
   cwd: tmpdir(), stdio: 'inherit', timeout: 20_000,
 })
 assert.equal(blobHash(readFileSync(source)), patchedBlob, 'only the reviewed native passthrough flag may change')
