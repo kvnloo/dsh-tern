@@ -9,6 +9,9 @@ usage: private_tern.sh live | startup | replay /ABSOLUTE/private/sdk.jsonl
   startup  actual empty-workspace TSP q/r/inline/frame/ACK, no user prompt
   replay   REPLAY ONLY through Tern surface-play; never starts DSH
 Trusted explicit overrides (all executables must be absolute):
+  DSH_HOST_ROOT                 absolute pinned host checkout (separate from plugin)
+  DSH_TUI_CLI                   host CLI inside DSH_HOST_ROOT, default built lib/bin.js
+  DSH_TUI_PACKAGE_TARBALL       exact locally prebuilt plugin .tgz
   DSH_TUI_EVIDENCE_DIR          new absolute owner-only output directory
   DSH_TUI_TERN_BIN              executable Tern CLI
   DSH_TUI_SWAY_BIN              executable Sway
@@ -20,7 +23,7 @@ Trusted explicit overrides (all executables must be absolute):
   DSH_TUI_LAUNCHER_ARTIFACT_SHA256  attested 64-hex launcher/build SHA256
   DSH_TUI_LAUNCHER_PROVENANCE   nonempty origin/SSH/build description
 
-Without an override, requires prebuilt apps/cli/lib/bin.js and node_modules.
+Default requires DSH_HOST_ROOT, a verified host build, and DSH_TUI_PACKAGE_TARBALL.
 No install/build/flock on groot. A remote wrapper must itself launch the
 real keyless profile with its remote fixture path, and its inaccessible DSH
 Session/SDK files will be EXPLICITLY UNCOLLECTED, not local live proof.
@@ -51,62 +54,57 @@ if [[ -n "${DSH_TUI_SWAY_LIBRARY_PATH:-}" ]]; then
 fi
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
-SOURCE_SHA="$(git -C "$REPO" rev-parse HEAD)"
+PLUGIN_SOURCE_SHA="$(git -C "$REPO" rev-parse HEAD)"
+[[ "$PLUGIN_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "missing plugin Git SHA" >&2; exit 2; }
+PACKAGE_TARBALL="${DSH_TUI_PACKAGE_TARBALL:-}"
+[[ "$PACKAGE_TARBALL" = /* && -f "$PACKAGE_TARBALL" && ! -L "$PACKAGE_TARBALL" ]] ||
+  { echo "DSH_TUI_PACKAGE_TARBALL must be an absolute prebuilt tarball" >&2; exit 2; }
+PLUGIN_HASH="$(sha256sum "$PACKAGE_TARBALL" | cut -d' ' -f1)"
 LAUNCHER="${DSH_TUI_LAUNCHER:-}"
 if [[ "$MODE" == replay && -n "$LAUNCHER" ]]; then
-  echo "replay never runs a DSH launcher; remove DSH_TUI_LAUNCHER" >&2
-  exit 2
+  echo "replay never runs a DSH launcher; remove DSH_TUI_LAUNCHER" >&2; exit 2
 fi
 if [[ -z "$LAUNCHER" ]]; then
-  CLI="$REPO/apps/cli/lib/bin.js"
+  HOST="${DSH_HOST_ROOT:-}"
+  [[ "$HOST" = /* && -f "$HOST/apps/cli/package.json" && -d "$HOST/.git" ]] ||
+    { echo "DSH_HOST_ROOT must name an absolute real DSH checkout" >&2; exit 2; }
+  HOST="$(cd "$HOST" && pwd -P)"
+  SOURCE_SHA="$(git -C "$HOST" rev-parse HEAD)"
+  [[ "$SOURCE_SHA" == "5badb15009ae1756c3afe0ae0cef1faafc290ccc" ]] ||
+    { echo "pinned unmodified DSH host SHA mismatch" >&2; exit 2; }
+  CLI="${DSH_TUI_CLI:-$HOST/apps/cli/lib/bin.js}"
+  [[ "$CLI" = /* && "$CLI" == "$HOST/"* && -f "$CLI" && -d "$HOST/node_modules" ]] ||
+    { echo "host CLI/node_modules missing or outside DSH_HOST_ROOT" >&2; exit 2; }
   LOCATION=local
   HASH_ORIGIN=measured-locally
-  if [[ "$MODE" == replay ]]; then
-    HASH="$(sha256sum "$SCRIPT_DIR/private_tern.sh" | cut -d' ' -f1)"
-    PROVENANCE="REPLAY ONLY: harness script hash; no DSH CLI used or attested"
-  else
-    [[ -f "$CLI" && -d "$REPO/node_modules" ]] ||
-      { echo "local built/source prerequisites absent: $CLI and node_modules" >&2; exit 2; }
-    # A CLI file hash alone cannot bind a binary to the current Git head.
-    # The complete root build writes a source/version/client-artifact record
-    # only after build:lib finishes. Refuse a missing or stale build record.
-    node --input-type=module - "$REPO" "$SOURCE_SHA" "$CLI" <<'JS'
+  # Read the REAL host build record; never substitute plugin checkout metadata.
+  node --input-type=module - "$HOST" "$SOURCE_SHA" "$CLI" <<'JS'
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-const [root, head, cli] = process.argv.slice(2)
-const { readClientBuildRecord } = await import(pathToFileURL(join(root, 'scripts/client-build-environment.ts')).href)
-const record = readClientBuildRecord(root)
-const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version
+const [host, head, cli] = process.argv.slice(2)
+const { readClientBuildRecord } = await import(pathToFileURL(join(host, 'scripts/client-build-environment.ts')).href)
+const record = readClientBuildRecord(host)
+const version = JSON.parse(readFileSync(join(host, 'package.json'), 'utf8')).version
 if (record.environment.DSH_CLIENT_COMMIT_HASH !== head.slice(0, 7)
     || record.environment.DSH_CLIENT_VERSION !== version
     || record.environment.DSH_CLIENT_GIT_DIRTY === 'true'
-    || statSync(cli).mtimeMs > statSync(join(root, '.dsh-build/client-build-environment.json')).mtimeMs) {
-  throw new Error('local CLI build record is stale or inconsistent with source/build')
+    || statSync(cli).mtimeMs > statSync(join(host, '.dsh-build/client-build-environment.json')).mtimeMs) {
+  throw new Error('host CLI build record is stale or inconsistent with source/build')
 }
 JS
-    HASH="$(sha256sum "$CLI" | cut -d' ' -f1)"
-    PROVENANCE="measured CLI hash; complete root build record checked against commit, version and client artifact hashes"
-  fi
+  HASH="$(sha256sum "$CLI" | cut -d' ' -f1)"
+  PROVENANCE="measured host CLI hash; real host client build record verified against source and version"
 else
-  [[ "$LAUNCHER" = /* && -x "$LAUNCHER" ]] ||
-    { echo "trusted launcher must be an absolute executable" >&2; exit 2; }
-  LOCATION="${DSH_TUI_LAUNCHER_LOCATION:-}"
+  [[ "$LAUNCHER" = /* && -x "$LAUNCHER" && "${DSH_TUI_LAUNCHER_LOCATION:-}" == remote ]] ||
+    { echo "only an explicitly remote, executable trusted launcher is permitted" >&2; exit 2; }
+  LOCATION=remote
   SOURCE_SHA="${DSH_TUI_LAUNCHER_SOURCE_SHA:-}"
   HASH="${DSH_TUI_LAUNCHER_ARTIFACT_SHA256:-}"
   PROVENANCE="${DSH_TUI_LAUNCHER_PROVENANCE:-}"
-  [[ "$LOCATION" == local || "$LOCATION" == remote ]] ||
-    { echo "declare launcher location local|remote" >&2; exit 2; }
   [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ && "$HASH" =~ ^[a-f0-9]{64}$ && -n "$PROVENANCE" ]] ||
-    { echo "explicit launcher source SHA, build SHA256, provenance required" >&2; exit 2; }
-  if [[ "$LOCATION" == local ]]; then
-    [[ "$SOURCE_SHA" == "$(git -C "$REPO" rev-parse HEAD)" &&
-       "$HASH" == "$(sha256sum "$LAUNCHER" | cut -d' ' -f1)" ]] ||
-      { echo "local override hash/source not measured on this checkout" >&2; exit 2; }
-    HASH_ORIGIN=measured-locally
-  else
-    HASH_ORIGIN=declared-remote
-  fi
+    { echo "remote host source, artifact SHA256 and provenance required" >&2; exit 2; }
+  HASH_ORIGIN=declared-remote
 fi
 BASE="${DSH_TUI_EVIDENCE_DIR:-}"
 if [[ -n "$BASE" ]]; then
@@ -117,7 +115,11 @@ else
   BASE="$(mktemp -d "${TMPDIR:-/tmp}/dsh-tsp-native.XXXXXXXX")"
 fi
 BASE="$(cd "$BASE" && pwd -P)"
-mkdir -m 700 -- "$BASE"/{runtime,home,cache,config,agents,sessions,tern,control,log,workspace}
+mkdir -m 700 -- "$BASE"/{plugin,runtime,home,cache,config,agents,sessions,tern,control,log,workspace}
+cp -- "$PACKAGE_TARBALL" "$BASE/plugin/plugin.tgz"
+chmod 600 "$BASE/plugin/plugin.tgz"
+[[ "$(sha256sum "$BASE/plugin/plugin.tgz" | cut -d' ' -f1)" == "$PLUGIN_HASH" ]] ||
+  { echo "copied plugin artifact hash differs from measured tarball" >&2; exit 2; }
 WORKSPACE="$BASE/workspace"
 SWAY_PID=""
 TERN_PID=""
@@ -174,10 +176,10 @@ else
 fi
 printf '%s\n' "$EVIDENCE_MODE" >"$BASE/control/evidence-mode"
 printf '%s\n' "$MODE" >"$BASE/control/mode"
-python3 - "$BASE" "$SOURCE_SHA" "$HASH" "$LOCATION" "$HASH_ORIGIN" "$PROVENANCE" "$SCOPE" "$MODE" <<'PY'
+python3 - "$BASE" "$SOURCE_SHA" "$HASH" "$LOCATION" "$HASH_ORIGIN" "$PROVENANCE" "$SCOPE" "$MODE" "$PLUGIN_SOURCE_SHA" "$PLUGIN_HASH" <<'PY'
 import json,os,stat,sys,uuid
 from pathlib import Path
-base,source,artifact,location,origin,provenance,scope,mode=sys.argv[1:]
+base,source,artifact,location,origin,provenance,scope,mode,plugin_source,plugin_artifact=sys.argv[1:]
 ctl=Path(base)/"control"
 # Local startup metadata is measured before launch, not inferred from Git.
 workspace=Path(base)/"workspace"
@@ -193,6 +195,10 @@ workspace_start=({"empty":True,"prior_events":0} if location=="local" and mode!=
 (ctl/"launcher.json").write_text(json.dumps(dict(
  source_sha=source,artifact_sha256=artifact,location=location,
  hash_origin=origin,provenance=provenance),indent=2)+"\n")
+(ctl/"plugin.json").write_text(json.dumps(dict(
+ source_sha=plugin_source,artifact_sha256=plugin_artifact,
+ location="local",hash_origin="measured-locally",
+ provenance="measured local packed plugin artifact; separate from host source and build attestation"),indent=2)+"\n")
 (ctl/"capture.json").write_text(json.dumps(dict(
  capture_id=str(uuid.uuid4()),scope=scope,
  model_id=("not-invoked-replay" if mode=="replay" else
@@ -221,6 +227,22 @@ SAFE_ENV=(
 )
 if [[ -n "${DSH_TUI_SWAY_LIBRARY_PATH:-}" ]]; then
  SAFE_ENV+=("LD_LIBRARY_PATH=$DSH_TUI_SWAY_LIBRARY_PATH")
+fi
+# Install the prebuilt plugin using the REAL DSH package manager in a private profile.
+# Do not manually create plugin links, activate mock manifests, or run providers.
+if [[ "$MODE" != replay && "$LOCATION" == local ]]; then
+  env -i "${SAFE_ENV[@]}" node "$CLI" plugin --profile tui add "$PACKAGE_TARBALL" \
+    >"$BASE/log/plugin-install.log" 2>&1 ||
+    { cat "$BASE/log/plugin-install.log" >&2; echo "external plugin install failed" >&2; exit 1; }
+  node - "$BASE/home/dsh/profiles/tui/package.json" <<'JS'
+const fs = require('node:fs')
+const profile = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+if (!profile.dependencies?.['@kvnloo/dsh-tern'] ||
+    JSON.stringify(profile.dsh?.profile?.bundles) !==
+    JSON.stringify(['@deepseek-ai/dsh-base', '@kvnloo/dsh-tern'])) {
+  throw new Error('missing real installed base+external plugin composition')
+}
+JS
 fi
 env -i "${SAFE_ENV[@]}" "$SWAY" --config "$BASE/sway.conf" >"$BASE/log/sway.log" 2>&1 &
 SWAY_PID=$!
@@ -367,8 +389,8 @@ set -uo pipefail
 cd $(printf '%q' "$WORKSPACE")
 EOF
 if [[ -z "$LAUNCHER" ]]; then
- printf 'node %q --profile tui --patch %q\n' "$CLI" \
-   "$REPO/apps/cli/tests/profiles/tui/fixtures/cordis.yml" >>"$BASE/launch-dsh.sh"
+ printf 'node %q tui --patch %q\n' "$CLI" \
+   "$REPO/tests/host/fixtures/cordis.yml" >>"$BASE/launch-dsh.sh"
 else
  printf '%q\n' "$LAUNCHER" >>"$BASE/launch-dsh.sh"
 fi

@@ -1,0 +1,12 @@
+node_modules/
+lib/
+_host/
+coverage/
+*.tgz
+*.tsbuildinfo
+.DS_Store
+.pnpm-debug.log
+*.log
+evidence/
+private-evidence/
+licenses/

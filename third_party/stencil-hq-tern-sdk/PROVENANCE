@@ -1,0 +1,14 @@
+Source repository: https://github.com/stencil-hq/tern-sdk
+Source path: LICENSE
+Git blob SHA-1: d90a6ea82277f531056af45928102fa58d71ae0c
+Observed tag: go/tern/v0.1.0
+Tag commit: 46bd7df153d3135d84a0b5658dfb4705d0bddb81
+Retrieved: 2026-10-23
+Retrieval: gh api repos/stencil-hq/tern-sdk/git/blobs/d90a6ea82277f531056af45928102fa58d71ae0c
+The API's base64 content was decoded without modifying the bytes.
+
+The published @stencil-hq/tern@0.1.0 package declares MIT but omits a
+license file. No JavaScript release tag was available (the repository's
+only release tag was go/tern/v0.1.0). This notice is pinned by its exact
+Git blob hash, not by an asserted match between the Go tag and npm publish.
+copy-sdk-license.mjs verifies the blob before using this fallback.

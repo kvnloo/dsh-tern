@@ -1,5 +1,5 @@
 /** Real Cordis Loader composition of TUI startup and injected consumer config. */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -9,7 +9,7 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { apply, type TuiStartupValues } from '../src/startup.ts'
-import { PROFILE_TEMPLATES } from '../../../boot/app-boot/src/profile.ts'
+import { initProfile } from '@deepseek-ai/dsh-app-boot'
 
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => { for (const close of cleanups.splice(0)) await close() })
@@ -70,10 +70,22 @@ async function boot(args: string[]): Promise<{
 }
 
 describe('shipped TUI profile / ordinary plugin composition', () => {
-  it('installs dsh-base followed by the independent TUI bundle', () => {
-    expect(PROFILE_TEMPLATES.tui?.bundles).toEqual([
-      '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-tui-app',
-    ])
+  it('initializes an ordinary base-only named profile before external plugin installation', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-tui-profile-'))
+    try {
+      // The host supplies the base template. Only the real dsh plugin manager
+      // may add and activate the separately packed @kvnloo/dsh-tern layer
+      // (covered in the source/lib public PTY gates).
+      initProfile(dir, ['@deepseek-ai/dsh-base'])
+      const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as {
+        dsh?: { profile?: { bundles?: string[] } }
+        dependencies?: Record<string, string>
+      }
+      expect(manifest.dsh?.profile?.bundles).toEqual(['@deepseek-ai/dsh-base'])
+      expect(manifest.dependencies?.['@kvnloo/dsh-tern']).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
   it('resolves defaults through a real Loader tree', async () => {
     const result = await boot([])
